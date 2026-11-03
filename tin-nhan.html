@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Phân tích tin nhắn – ScamShield-AI</title>
+  <meta name="description" content="Dán tin nhắn, email đáng ngờ để tìm dấu hiệu lừa đảo và đường link giả mạo.">
+  <script>try { const t = localStorage.getItem("scamshield_theme"); if (t) document.documentElement.dataset.theme = t; } catch {}</script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body data-page="message">
+  <header id="site-header"></header>
+
+  <main>
+    <section class="page-hero">
+      <div class="hero-grid" aria-hidden="true"></div>
+      <div class="container">
+        <p class="kicker mono">// Tin nhắn</p>
+        <h1>Phân tích tin nhắn đáng ngờ <span class="tag info">Thử nghiệm</span></h1>
+        <p class="lead">Dán nội dung tin nhắn, email, lời mời việc làm, lời kẻ gian nói qua điện thoại… Hệ thống dò theo bộ từ khoá lừa đảo phổ biến, kiểm tra các đường link trong tin và gợi ý cách xử lý.</p>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container split">
+        <div class="split-intro reveal">
+          <h2 class="h-sub" style="margin-top:0">Hệ thống kiểm tra gì?</h2>
+          <ul class="checklist">
+            <li>Yêu cầu OTP, mật khẩu, thông tin thẻ</li>
+            <li>Mạo danh ngân hàng, công an, cơ quan nhà nước</li>
+            <li>Việc nhẹ lương cao, nạp tiền làm nhiệm vụ</li>
+            <li>Trúng thưởng, đòi phí nhận quà</li>
+            <li>Đường link giả mạo nằm trong tin nhắn</li>
+          </ul>
+          <h2 class="h-sub">Thử với tin nhắn mẫu</h2>
+          <div class="samples">
+            <button class="sample" data-text="[VCB] Tai khoan cua quy khach da bi tam khoa do nghi van giao dich bat thuong. Vui long truy cap vcb-xacthuc.top de xac minh trong 24h.">🏦 SMS ngân hàng giả</button>
+            <button class="sample" data-text="Alo, tôi là cán bộ công an quận, anh liên quan đến đường dây rửa tiền. Anh phải chuyển tiền vào tài khoản tạm giữ để xác minh, không được nói với người thân.">👮 Mạo danh công an</button>
+            <button class="sample" data-text="Tuyển CTV làm tại nhà, việc nhẹ lương cao 500k/ngày, chỉ cần like video. Hoàn thành nhiệm vụ VIP cần nạp 2 triệu nhận hoa hồng 30%. Liên hệ Telegram.">💼 Việc nhẹ lương cao</button>
+            <button class="sample" data-text="Chiều nay 5h họp lớp ở quán cũ nhé mọi người, nhớ đến đúng giờ.">✅ Tin nhắn bình thường</button>
+          </div>
+        </div>
+        <div class="reveal">
+          <form id="aiForm" class="ai-form panel">
+            <div class="panel-bar mono"><span></span><span></span><span></span>message.txt</div>
+            <textarea id="aiText" rows="8" maxlength="10000" placeholder="Ví dụ: [VCB] Tai khoan cua quy khach da bi tam khoa do nghi van giao dich bat thuong. Vui long truy cap vcb-xacthuc.top de xac minh trong 24h..."></textarea>
+            <div class="ai-actions">
+              <span class="small muted">Không gửi mật khẩu, mã OTP, số thẻ đầy đủ.</span>
+              <button class="btn btn-primary" type="submit" id="aiSubmit">Phân tích tin nhắn</button>
+            </div>
+          </form>
+          <div id="aiResult" class="result" hidden></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer id="site-footer"></footer>
+
+  <script src="js/dictionaries.js"></script>
+  <script src="js/url-analyzer.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/common.js"></script>
+  <script src="js/scan.js"></script>
+  <script src="js/message.js"></script>
+</body>
+</html>
