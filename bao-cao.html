@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Báo cáo lừa đảo – ScamShield-AI</title>
+  <meta name="description" content="Gửi báo cáo đường link, số điện thoại, số tài khoản lừa đảo để cảnh báo cộng đồng.">
+  <script>try { const t = localStorage.getItem("scamshield_theme"); if (t) document.documentElement.dataset.theme = t; } catch {}</script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body data-page="report">
+  <header id="site-header"></header>
+
+  <main>
+    <section class="page-hero">
+      <div class="hero-grid" aria-hidden="true"></div>
+      <div class="container">
+        <p class="kicker mono">// Báo cáo</p>
+        <h1>Báo cáo lừa đảo</h1>
+        <p class="lead">Báo cáo của bạn giúp cộng đồng tránh được bẫy. Thông tin sẽ được kiểm duyệt trước khi công bố.</p>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container report-wrap">
+        <div class="reveal">
+          <form id="reportForm" class="report-form panel">
+            <div class="form-row">
+              <label>Loại báo cáo
+                <select name="kind" required>
+                  <option value="url">Website / đường link</option>
+                  <option value="phone">Số điện thoại</option>
+                  <option value="bank">Số tài khoản ngân hàng</option>
+                  <option value="social">Tài khoản mạng xã hội</option>
+                </select>
+              </label>
+              <label>Hình thức lừa đảo
+                <select name="category" id="reportCategory"></select>
+              </label>
+            </div>
+            <label>Đối tượng cần báo cáo
+              <input name="subject" required placeholder="Link, số điện thoại, STK…" spellcheck="false">
+            </label>
+            <label>Mô tả sự việc
+              <textarea name="desc" rows="5" required placeholder="Kẻ gian liên hệ bạn như thế nào, yêu cầu gì…"></textarea>
+            </label>
+            <label class="check"><input type="checkbox" required> Tôi cam kết thông tin là đúng sự thật</label>
+            <button class="btn btn-danger" type="submit">Gửi báo cáo</button>
+            <p id="reportMsg" class="form-msg" hidden></p>
+          </form>
+        </div>
+        <div class="reveal">
+          <h3 class="recent-title mono"><span class="live-dot"></span>Báo cáo gần đây</h3>
+          <ul class="recent" id="recentReports"></ul>
+          <p class="small muted" style="margin-top:16px">Báo cáo hiện được lưu trên trình duyệt của bạn. Sau khi gửi, kiểm tra lại đối tượng đó ở trang <a href="index.html">Quét URL</a> sẽ cho kết quả nguy hiểm.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer id="site-footer"></footer>
+
+  <script src="js/data.js"></script>
+  <script src="js/common.js"></script>
+  <script src="js/report.js"></script>
+</body>
+</html>
