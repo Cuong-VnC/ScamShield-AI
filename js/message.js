@@ -1,9 +1,12 @@
 // Trang tin nhắn: phân tích nội dung đáng ngờ bằng bộ quy tắc (TEXT_RULES trong data.js).
-// Khi có backend, chỉ cần thay analyzeMessage() bằng lời gọi API trả về cùng cấu trúc
-// { verdict, risk_score, scam_type, summary, red_flags, advice }.
+// Các đường link trong tin nhắn được gửi lên model AI (js/api.js) – chỉ gửi link, không gửi nội dung tin nhắn.
+// Model lỗi / chậm thì dùng bộ phân tích URL trên trình duyệt.
+// Kết quả: { verdict, risk_score, scam_type, summary, red_flags, advice }.
 const stripVi = (s) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/đ/g, "d");
 
-function analyzeMessage(text) {
+const MAX_AI_LINKS = 3;
+
+async function analyzeMessage(text) {
   const norm = stripVi(text);
   const flags = [];
   const typeScore = {};
@@ -17,16 +20,21 @@ function analyzeMessage(text) {
   });
 
   // Kiểm tra các đường link trong tin nhắn bằng bộ phân tích URL.
-  const links = text.match(/(https?:\/\/)?([a-z0-9-]+\.)+[a-z]{2,}(\/\S*)?/gi) || [];
-  links.forEach((l) => {
-    const r = analyzeUrl(l);
-    if (r.level === "danger") {
+  const links = [...new Set(text.match(/(https?:\/\/)?([a-z0-9-]+\.)+[a-z]{2,}(\/\S*)?/gi) || [])];
+  const results = await Promise.all(links.map((l, i) =>
+    i < MAX_AI_LINKS ? analyzeUrlWithAi(l) : Promise.resolve(analyzeUrl(l))));
+  results.forEach((r) => {
+    const by = r.aiState === "ok" ? "theo model AI" : "theo bộ quy tắc";
+    if (r.ai?.status === "DomainNotFound") {
+      score += 10;
+      flags.push(`Đường link trỏ tới tên miền không tồn tại: ${r.target} (${by}).`);
+    } else if (r.level === "danger") {
       score += 35;
-      flags.push(`Đường link nguy hiểm: ${r.target}.`);
+      flags.push(`Đường link nguy hiểm: ${r.target}${r.score !== null ? ` – ${r.score}% lừa đảo` : ""} (${by}).`);
       typeScore["Giả mạo ngân hàng"] = (typeScore["Giả mạo ngân hàng"] || 0) + 10;
     } else if (r.level === "warn") {
       score += 15;
-      flags.push(`Đường link đáng ngờ: ${r.target}.`);
+      flags.push(`Đường link đáng ngờ: ${r.target} (${by}).`);
     }
   });
 
@@ -75,11 +83,12 @@ $("#aiForm").addEventListener("submit", (e) => {
   const btn = $("#aiSubmit");
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>Đang phân tích…';
-  setTimeout(() => {
-    renderMessageResult(analyzeMessage(text));
-    btn.disabled = false;
-    btn.textContent = "Phân tích tin nhắn";
-  }, 600);
+  analyzeMessage(text)
+    .then(renderMessageResult)
+    .finally(() => {
+      btn.disabled = false;
+      btn.textContent = "Phân tích tin nhắn";
+    });
 });
 
 // Tin nhắn mẫu để thử nhanh.

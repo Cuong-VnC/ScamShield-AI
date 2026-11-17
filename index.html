@@ -26,9 +26,9 @@
 
       <div class="container hero-inner">
         <div class="hero-copy">
-          <p class="eyebrow"><span class="live-dot"></span>Hệ thống đang hoạt động · phân tích ngay trên trình duyệt</p>
+          <p class="eyebrow"><span class="live-dot"></span><span id="aiStatus">Đang kết nối model AI…</span></p>
           <h1>Quét trước khi <span class="glow">tin</span>.<br>Kiểm tra trước khi <span class="glow">chuyển tiền</span>.</h1>
-          <p class="lead">Dán đường link, số điện thoại hoặc số tài khoản. ScamShield tách cấu trúc, chấm điểm rủi ro và cho bạn biết <em>vì sao</em>.</p>
+          <p class="lead">Dán đường link, số điện thoại hoặc số tài khoản. Model AI chấm điểm rủi ro, ScamShield tách cấu trúc, tra cứu tên miền và cho bạn biết <em>vì sao</em>.</p>
         </div>
 
         <div class="checker">
@@ -68,6 +68,13 @@
             <a href="#" class="try" data-type="phone">0899 123 456</a>
             <a href="#" class="try" data-type="bank">1903 6688 9999</a>
           </p>
+          <div class="scan-history" id="scanHistory" hidden>
+            <div class="sh-head">
+              <span class="small muted">Kiểm tra gần đây <small>(chỉ lưu trên trình duyệt này)</small></span>
+              <button type="button" class="link-btn small" id="clearHistory">Xoá lịch sử</button>
+            </div>
+            <ul id="historyList"></ul>
+          </div>
         </div>
 
         <div class="stats">
@@ -140,6 +147,7 @@
 
   <script src="js/dictionaries.js"></script>
   <script src="js/url-analyzer.js"></script>
+  <script src="js/api.js"></script>
   <script src="js/data.js"></script>
   <script src="js/training-data.js"></script>
   <script src="js/common.js"></script>

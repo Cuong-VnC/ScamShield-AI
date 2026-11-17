@@ -67,7 +67,7 @@ function renderLayout() {
           <span class="brand-text">ScamShield<b>-AI</b></span>
         </a>
         <p class="muted">Kiểm tra đường link, số điện thoại, số tài khoản và học cách nhận diện lừa đảo – kèm giải thích vì sao.</p>
-        <p class="f-status mono"><span class="live-dot"></span>Phân tích ngay trên trình duyệt</p>
+        <p class="f-status mono"><span class="live-dot"></span>Model AI + phân tích trên trình duyệt</p>
       </div>
       ${col("Công cụ", [["index.html", "Quét URL / SĐT / STK"], ["tin-nhan.html", "Phân tích tin nhắn"], ["bao-cao.html", "Báo cáo lừa đảo"]])}
       ${col("Kiến thức", [["canh-bao.html#tin-canh-bao", "Cảnh báo mới nhất"], ["canh-bao.html#thu-doan", "Thủ đoạn phổ biến"], ["canh-bao.html#nguyen-tac", "6 nguyên tắc vàng"], ["dao-tao.html", "Khoá đào tạo"]])}
