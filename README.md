@@ -6,8 +6,21 @@ thích vì sao, cảnh báo thủ đoạn mới, hướng dẫn xử lý khi b�
 Kiểm tra đường link dùng **model AI đã train** (CNN+BiLSTM xếp chồng XGBoost, pipeline v8, 41 đặc trưng + 128
 đặc trưng TF-IDF/SVD). Backend tra cứu thêm thông tin thật của tên miền (DNS, WHOIS, TLS, HTTP).
 
+**ScamShield AI** is an AI-powered scam detection and awareness platform designed to help individuals and
+small businesses identify potential scams, analyze suspicious content, and improve cybersecurity awareness.
+
 > Dự án học tập (nhóm ICTLab, USTH). Kết quả chỉ mang tính tham khảo — luôn cẩn trọng trước khi nhập mật
 > khẩu, mã OTP hay chuyển tiền trên bất kỳ trang web nào.
+
+**Link web kiểm thử model:** https://kiemtratenmien.vercel.app/
+
+Lưu ý: server có thể phải khởi động lại sau 5–10 phút không dùng, nên phải chờ server chạy lại mới gửi link được.
+
+## Train model
+
+Notebook train nằm ở [Train model/code/code/train-model-url-v8.ipynb](Train%20model/code/code/train-model-url-v8.ipynb).
+Dataset (bản v6 + benchmark): https://huggingface.co/datasets/BHugvh/dataset_train_url — tải về rồi up lên
+Kaggle để train. Sau khi train, chép 7 file model vào `backend/models/` (xem [docs/MODEL-V8-DEPLOY-REPORT.md](docs/MODEL-V8-DEPLOY-REPORT.md)).
 
 ## Cách quét một đường link
 
