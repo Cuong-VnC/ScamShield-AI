@@ -3,21 +3,25 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ScamShield-AI – Phòng chống lừa đảo trực tuyến</title>
-  <meta name="description" content="Quét đường link, số điện thoại, số tài khoản để phát hiện dấu hiệu lừa đảo, kèm giải thích vì sao.">
-  <script>try { const t = localStorage.getItem("scamshield_theme"); if (t) document.documentElement.dataset.theme = t; } catch {}</script>
+  <title>ScamShield-AI – Kiểm tra đường link trước khi truy cập</title>
+  <meta name="description" content="Dán đường link đáng ngờ để ScamShield-AI đánh giá rủi ro bằng mô hình AI và phân tích địa chỉ web, kèm giải thích các dấu hiệu cần chú ý.">
+  <meta name="theme-color" content="#0b1533">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2 4 7v8c0 7.5 5.1 13.4 12 15 6.9-1.6 12-7.5 12-15V7L16 2z' fill='%231e40af'/%3E%3Ccircle cx='16' cy='15' r='3' fill='%23fff'/%3E%3C/svg%3E">
+  <!-- Ngôn ngữ đã chọn được đặt sớm để trình đọc màn hình đọc đúng; nội dung được dịch bởi js/language.js. -->
+  <script>document.documentElement.classList.add("js");try{var l=localStorage.getItem("scamshield_language");if(l==="en"||l==="vi")document.documentElement.lang=l}catch(e){}</script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
 </head>
-<body data-page="home">
+<body data-page="home" data-title-key="pageTitleHome" data-meta-key="metaHome">
   <header id="site-header"></header>
 
-  <main>
-    <!-- ============ HERO + CHECKER ============ -->
-    <section class="hero" id="kiem-tra">
+  <main id="main" tabindex="-1">
+    <!-- ============ HERO: quét URL ============ -->
+    <section class="hero" id="kiem-tra" aria-labelledby="heroTitle">
       <div class="hero-grid" aria-hidden="true"></div>
+      <div class="hero-glow" aria-hidden="true"></div>
       <div class="radar" aria-hidden="true">
         <span class="ring r1"></span><span class="ring r2"></span><span class="ring r3"></span>
         <span class="sweep"></span>
@@ -25,131 +29,160 @@
       </div>
 
       <div class="container hero-inner">
-        <div class="hero-copy">
-          <p class="eyebrow"><span class="live-dot"></span><span id="aiStatus">Đang kết nối model AI…</span></p>
-          <h1>Quét trước khi <span class="glow">tin</span>.<br>Kiểm tra trước khi <span class="glow">chuyển tiền</span>.</h1>
-          <p class="lead">Dán đường link, số điện thoại hoặc số tài khoản. Model AI chấm điểm rủi ro, ScamShield tách cấu trúc, tra cứu tên miền và cho bạn biết <em>vì sao</em>.</p>
-        </div>
+        <h1 id="heroTitle" data-i18n-html="heroTitle">Kiểm tra đường link <span class="hl">trước khi truy cập</span></h1>
+        <p class="hero-lead" data-i18n="heroLead">Dán đường link bạn nghi ngờ. ScamShield-AI kết hợp mô hình AI với phân tích địa chỉ web để đánh giá rủi ro và giải thích những dấu hiệu cần chú ý.</p>
 
-        <div class="checker">
-          <div class="checker-head">
-            <div class="tabs" role="tablist">
-              <button class="tab active" data-type="url" role="tab">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 2.5 15.3 0 18M12 3c-2.5 2.7-2.5 15.3 0 18"/></svg>
-                Website
-              </button>
-              <button class="tab" data-type="phone" role="tab">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M5 3h4l2 5-2.5 1.5a11 11 0 0 0 6 6L16 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 5a2 2 0 0 1 2-2z"/></svg>
-                Số điện thoại
-              </button>
-              <button class="tab" data-type="bank" role="tab">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 10 12 4l9 6M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 20h18"/></svg>
-                Số tài khoản
-              </button>
-            </div>
-            <span class="checker-status mono">scan://ready</span>
+        <form id="checkForm" class="scan-form" role="search" novalidate>
+          <label for="checkInput" class="sr-only" data-i18n="inputLabel">Đường link cần kiểm tra</label>
+          <div class="scan-input">
+            <span class="scan-input-icon" data-icon="link"></span>
+            <input id="checkInput" name="url" type="text" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false"
+              aria-describedby="checkError" data-i18n-placeholder="inputPlaceholder"
+              placeholder="Dán đường link, ví dụ: https://vietcombank-xacthuc.top/login">
           </div>
-          <form id="checkForm" class="check-form">
-            <label class="input-wrap">
-              <span class="prompt mono" aria-hidden="true">&gt;</span>
-              <input id="checkInput" type="text" autocomplete="off" spellcheck="false" placeholder="Ví dụ: https://vietcombank-xacthuc.top/login" required>
-            </label>
-            <button class="btn btn-primary btn-scan" type="submit">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>
-              Quét
-            </button>
-          </form>
-          <div id="checkResult" class="result" hidden></div>
-          <p class="hint">Thử nhanh:
-            <a href="#" class="try" data-type="url">vietcombank-xacthuc.top/login</a>
-            <a href="#" class="try" data-type="url">vietc0mbank.com</a>
-            <a href="#" class="try" data-type="url">paypal.secure-login.xyz/signin</a>
-            <a href="#" class="try" data-type="url">ib.techcombank.com.vn</a>
-            <a href="#" class="try" data-type="phone">0899 123 456</a>
-            <a href="#" class="try" data-type="bank">1903 6688 9999</a>
-          </p>
-          <div class="scan-history" id="scanHistory" hidden>
-            <div class="sh-head">
-              <span class="small muted">Kiểm tra gần đây <small>(chỉ lưu trên trình duyệt này)</small></span>
-              <button type="button" class="link-btn small" id="clearHistory">Xoá lịch sử</button>
-            </div>
-            <ul id="historyList"></ul>
-          </div>
-        </div>
+          <button class="btn btn-scan" id="scanBtn" type="submit">
+            <span class="btn-spinner" aria-hidden="true"></span>
+            <span class="btn-icon" data-icon="search"></span>
+            <span id="scanBtnLabel">Quét URL</span>
+          </button>
+          <p class="field-error" id="checkError" hidden><span data-icon="alert"></span><span></span></p>
+        </form>
 
-        <div class="stats">
-          <div class="stat"><strong class="mono" data-count="53116">0</strong><span>bản ghi URL bối cảnh Việt Nam (PhishVN)</span></div>
-          <div class="stat"><strong class="mono" data-count="235795">0</strong><span>URL lừa đảo &amp; hợp lệ quốc tế (PhiUSIIL)</span></div>
-          <div class="stat"><strong class="mono" id="statBrands" data-count="0">0</strong><span>thương hiệu được giám sát giả mạo</span></div>
-          <div class="stat"><strong class="mono" id="statKeywords" data-count="0">0</strong><span>từ khoá lừa đảo trong từ điển</span></div>
-        </div>
-        <p class="stats-src">Nguồn dữ liệu: PhishVN – Mendeley Data v4 (CC BY 4.0) · PhiUSIIL – UCI #967 (CC BY 4.0)</p>
+        <ul class="hero-ticks">
+          <li><span class="tick" data-icon="check"></span><span data-i18n="tick1">Phân tích URL bằng AI</span></li>
+          <li><span class="tick" data-icon="check"></span><span data-i18n="tick2">Giải thích dấu hiệu rủi ro</span></li>
+          <li><span class="tick" data-icon="check"></span><span data-i18n="tick3">Không cần tạo tài khoản</span></li>
+        </ul>
+
+        <!-- Bốn ô số liệu giữ nguyên nguồn của bản FE: hai bộ dữ liệu huấn luyện (số cố định)
+             + số thương hiệu (BRANDS_VN) và số từ khoá (SCAM_KEYWORDS) đếm từ js/dictionaries.js. -->
+        <ul class="stats" data-i18n-aria-label="statsLabel">
+          <li class="stat"><span class="stat-icon" data-icon="database"></span><strong class="mono" data-count="53116">0</strong><span data-i18n="statPhishVN">bản ghi URL bối cảnh Việt Nam (PhishVN)</span></li>
+          <li class="stat"><span class="stat-icon" data-icon="globe"></span><strong class="mono" data-count="235795">0</strong><span data-i18n="statPhiUSIIL">URL lừa đảo &amp; hợp lệ quốc tế (PhiUSIIL)</span></li>
+          <li class="stat"><span class="stat-icon" data-icon="tag"></span><strong class="mono" id="statBrands" data-count="0">0</strong><span data-i18n="statBrands">thương hiệu được giám sát giả mạo</span></li>
+          <li class="stat"><span class="stat-icon" data-icon="book"></span><strong class="mono" id="statKeywords" data-count="0">0</strong><span data-i18n="statKeywords">từ khoá lừa đảo trong từ điển</span></li>
+        </ul>
       </div>
     </section>
 
-    <!-- ============ KHÁM PHÁ ============ -->
-    <section class="section alt">
+    <!-- ============ KẾT QUẢ + LỊCH SỬ (hiện khi có dữ liệu) ============ -->
+    <section class="scan-zone" id="scanZone" hidden>
+      <div class="container scan-zone-inner">
+        <article id="checkResult" class="result" hidden tabindex="-1"></article>
+        <div class="history-card" id="scanHistory" hidden>
+          <div class="hc-head">
+            <h2 class="hc-title"><span data-icon="clock"></span><span data-i18n="historyTitle">Kiểm tra gần đây</span></h2>
+            <span class="hc-note" data-i18n="historyNote">Chỉ lưu trên trình duyệt này</span>
+            <button type="button" class="btn btn-ghost btn-xs" id="clearHistory"><span data-icon="trash"></span><span data-i18n="historyClear">Xoá lịch sử</span></button>
+          </div>
+          <ul class="h-list" id="historyList"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 1. HOẠT ĐỘNG NHƯ THẾ NÀO ============ -->
+    <section class="section" id="hoat-dong" aria-labelledby="howTitle">
       <div class="container">
         <div class="section-head reveal">
-          <div>
-            <p class="kicker mono">// Khám phá</p>
-            <h2>Công cụ &amp; kiến thức</h2>
-          </div>
-          <p class="muted">Mỗi phần là một trang riêng – chọn điều bạn cần.</p>
+          <h2 id="howTitle" data-i18n="howTitle">ScamShield hoạt động như thế nào?</h2>
+          <p class="section-lead" data-i18n="howLead">Ba bước ngắn từ lúc dán đường link đến khi nhận kết quả.</p>
         </div>
-        <div class="grid tiles-grid">
-          <a class="card tile reveal" href="tin-nhan.html">
-            <span class="tile-icon">💬</span>
-            <h3>Phân tích tin nhắn</h3>
-            <p>Dán SMS, Zalo, email đáng ngờ để tìm dấu hiệu lừa đảo và link giả trong đó.</p>
-            <span class="tile-go">Mở công cụ →</span>
-          </a>
-          <a class="card tile reveal" href="canh-bao.html">
-            <span class="tile-icon">📡</span>
-            <h3>Cảnh báo &amp; thủ đoạn</h3>
-            <p>Tin cảnh báo mới nhất, 8 thủ đoạn phổ biến và 6 nguyên tắc vàng.</p>
-            <span class="tile-go">Xem cảnh báo →</span>
-          </a>
-          <a class="card tile reveal" href="ung-pho.html">
-            <span class="tile-icon">🚨</span>
-            <h3>Lỡ bị lừa?</h3>
-            <p>5 bước cần làm ngay và các số điện thoại khẩn cấp.</p>
-            <span class="tile-go">Xem hướng dẫn →</span>
-          </a>
-          <a class="card tile reveal" href="bao-cao.html">
-            <span class="tile-icon">📝</span>
-            <h3>Báo cáo lừa đảo</h3>
-            <p>Gửi link, số điện thoại, số tài khoản lừa đảo để cảnh báo cộng đồng.</p>
-            <span class="tile-go">Gửi báo cáo →</span>
-          </a>
-        </div>
+        <ol class="grid cards-3 steps">
+          <li class="info-card step reveal">
+            <div class="step-top"><span class="step-num mono">1</span><span class="card-icon" data-icon="clipboard"></span></div>
+            <h3 data-i18n="how1Title">Nhập đường link</h3>
+            <p data-i18n="how1Desc">Dán đường link đáng ngờ bạn nhận được vào ô quét ở đầu trang.</p>
+          </li>
+          <li class="info-card step reveal">
+            <div class="step-top"><span class="step-num mono">2</span><span class="card-icon" data-icon="radar"></span></div>
+            <h3 data-i18n="how2Title">Phân tích rủi ro</h3>
+            <p data-i18n="how2Desc">Model AI ở máy chủ và bộ quy tắc trên trình duyệt cùng xem xét những tín hiệu có trong đường link và tên miền.</p>
+          </li>
+          <li class="info-card step reveal">
+            <div class="step-top"><span class="step-num mono">3</span><span class="card-icon" data-icon="shieldCheck"></span></div>
+            <h3 data-i18n="how3Title">Nhận kết quả</h3>
+            <p data-i18n="how3Desc">Website hiển thị mức rủi ro, xác suất do model đưa ra và những dấu hiệu cần chú ý, kèm giải thích.</p>
+          </li>
+        </ol>
       </div>
     </section>
 
-    <!-- ============ CTA ĐÀO TẠO ============ -->
-    <section class="section">
+    <!-- ============ 2. KIỂM TRA NHỮNG YẾU TỐ NÀO ============ -->
+    <section class="section" id="yeu-to" aria-labelledby="examTitle">
       <div class="container">
-        <a class="cta-training panel spot reveal" href="dao-tao.html">
-          <div class="cta-icon">🎓</div>
-          <div>
-            <p class="kicker mono">// Đào tạo</p>
-            <h2>Khoá học phòng chống lừa đảo</h2>
-            <p class="muted">6 bài học ngắn với ví dụ thật, câu hỏi tình huống và bài kiểm tra cuối khoá có chứng nhận.</p>
-            <p class="small" id="trainingProgress"></p>
-          </div>
-          <span class="btn btn-primary">Bắt đầu học →</span>
-        </a>
+        <div class="section-head reveal">
+          <h2 id="examTitle" data-i18n="examTitle">ScamShield kiểm tra những yếu tố nào?</h2>
+          <p class="section-lead" data-i18n="examLead">Mỗi lần quét kết hợp nhiều nhóm tín hiệu khác nhau để đưa ra đánh giá.</p>
+        </div>
+        <ul class="grid cards-4">
+          <li class="info-card feature reveal">
+            <span class="card-icon" data-icon="code"></span>
+            <h3 data-i18n="exam1Title">Cấu trúc URL</h3>
+            <p data-i18n="exam1Desc">Tên miền, tên miền phụ, đường dẫn và những dấu hiệu bất thường như địa chỉ IP, link rút gọn hay đuôi tên miền hay bị lạm dụng.</p>
+          </li>
+          <li class="info-card feature reveal">
+            <span class="card-icon" data-icon="copy"></span>
+            <h3 data-i18n="exam2Title">Dấu hiệu giả mạo</h3>
+            <p data-i18n="exam2Desc">Từ khoá đáng ngờ và tên miền bắt chước thương hiệu quen thuộc, kể cả kiểu gõ sai cố ý hoặc dùng ký tự trông giống nhau.</p>
+          </li>
+          <li class="info-card feature reveal">
+            <span class="card-icon" data-icon="cpu"></span>
+            <h3 data-i18n="exam3Title">Mô hình AI</h3>
+            <p data-i18n="exam3Desc">Model đã huấn luyện phân tích các đặc trưng của đường link và đưa ra xác suất lừa đảo.</p>
+          </li>
+          <li class="info-card feature reveal">
+            <span class="card-icon" data-icon="globe"></span>
+            <h3 data-i18n="exam4Title">Thông tin tên miền</h3>
+            <p data-i18n="exam4Desc">Thông tin DNS, chứng chỉ TLS, phản hồi HTTP và WHOIS khi máy chủ tra cứu được.</p>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============ 3. KHI NÀO NÊN KIỂM TRA ============ -->
+    <section class="section" id="khi-nao" aria-labelledby="whenTitle">
+      <div class="container">
+        <div class="section-head reveal">
+          <h2 id="whenTitle" data-i18n="whenTitle">Khi nào bạn nên kiểm tra đường link?</h2>
+          <p class="section-lead" data-i18n="whenLead">Gặp một trong những tình huống dưới đây, hãy dừng lại vài giây và quét trước khi bấm.</p>
+        </div>
+        <ul class="grid cards-4">
+          <li class="info-card situation reveal">
+            <span class="card-icon" data-icon="message"></span>
+            <h3 data-i18n="when1Title">Link nhận qua SMS hoặc ứng dụng nhắn tin</h3>
+            <p data-i18n="when1Desc">Tin nhắn báo giao hàng, khoá tài khoản hay hoàn tiền kèm một đường link lạ, kể cả khi người gửi hiển thị tên thương hiệu.</p>
+          </li>
+          <li class="info-card situation reveal">
+            <span class="card-icon" data-icon="lock"></span>
+            <h3 data-i18n="when2Title">Trang yêu cầu đăng nhập hoặc nhập OTP</h3>
+            <p data-i18n="when2Desc">Trước khi nhập mật khẩu, mã OTP hay thông tin thẻ, hãy chắc chắn bạn đang ở đúng trang chính thức.</p>
+          </li>
+          <li class="info-card situation reveal">
+            <span class="card-icon" data-icon="gift"></span>
+            <h3 data-i18n="when3Title">Ưu đãi, trúng thưởng bất thường</h3>
+            <p data-i18n="when3Desc">Quà tặng, giảm giá quá sâu hay thông báo trúng thưởng cho chương trình bạn chưa từng tham gia thường là mồi nhử.</p>
+          </li>
+          <li class="info-card situation reveal">
+            <span class="card-icon" data-icon="bank"></span>
+            <h3 data-i18n="when4Title">Địa chỉ na ná tổ chức quen thuộc</h3>
+            <p data-i18n="when4Desc">Tên miền giống ngân hàng, cơ quan nhà nước hay sàn thương mại điện tử nhưng thêm ký tự, dấu gạch ngang hoặc đuôi lạ.</p>
+          </li>
+        </ul>
+        <div class="section-cta reveal">
+          <a class="btn btn-primary" href="#kiem-tra" data-focus-scan><span data-icon="search"></span><span data-i18n="whenCta">Quét một đường link ngay</span></a>
+        </div>
       </div>
     </section>
   </main>
 
   <footer id="site-footer"></footer>
 
+  <!-- Thứ tự nạp: dữ liệu → bộ phân tích → API → ngôn ngữ → phần chung → quét → trang chủ. -->
   <script src="js/dictionaries.js"></script>
   <script src="js/url-analyzer.js"></script>
   <script src="js/api.js"></script>
   <script src="js/data.js"></script>
-  <script src="js/training-data.js"></script>
+  <script src="js/language.js"></script>
   <script src="js/common.js"></script>
   <script src="js/scan.js"></script>
   <script src="js/home.js"></script>
