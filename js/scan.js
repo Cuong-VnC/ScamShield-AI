@@ -1,9 +1,13 @@
-// Kiểm tra URL / số điện thoại / số tài khoản và hiển thị kết quả. Dùng ở trang chủ và trang tin nhắn.
+// Kiểm tra URL và hiển thị kết quả (trang chủ).
 //
 // URL được phân tích theo hai lớp:
 //   1. Bộ quy tắc trên trình duyệt (js/url-analyzer.js) – chạy tức thì, cho phần tách cấu trúc + "Vì sao".
 //   2. Model AI ở backend (js/api.js → POST /predict) – đưa ra KẾT LUẬN và xác suất cuối cùng.
 // Nếu backend lỗi / quá chậm, giữ kết quả của bộ quy tắc và ghi chú rõ cho người dùng.
+//
+// [redesign] analyzeUrl / mergeAiResult / analyzeUrlWithAi giữ nguyên logic của ScamShield-AI-fe
+// (ngưỡng, ưu tiên danh sách đen, nguồn xác suất). Phần hiển thị được làm lại và dịch VI/EN qua Language;
+// các trường title tiếng Việt trong dữ liệu vẫn giữ để tương thích. Đã bỏ analyzeNumber (quét SĐT/STK).
 
 const URL_TITLES = {
   danger: "NGUY HIỂM – Nhiều dấu hiệu lừa đảo",
@@ -66,152 +70,167 @@ async function analyzeUrlWithAi(input, onPartial) {
   try {
     return mergeAiResult(r, await AiApi.predict(input));
   } catch (e) {
-    return { ...r, aiState: "fail", aiError: e.message };
+    // [redesign] lưu thêm mã lỗi để hiển thị VI/EN; aiError giữ thông điệp gốc.
+    return { ...r, aiState: "fail", aiError: e.message, aiErrorCode: e.code, aiErrorStatus: e.status, aiErrorDetail: e.detail };
   }
 }
 
-function analyzeNumber(input, type) {
-  const digits = input.replace(/\D/g, "");
-  const label = type === "phone" ? "Số điện thoại" : "Số tài khoản";
-  if (type === "phone" && !/^(0|84)\d{8,10}$/.test(digits))
-    return { level: "warn", title: "Số điện thoại không hợp lệ", target: input, score: 50, reasons: ["Số điện thoại Việt Nam gồm 10 chữ số, bắt đầu bằng 0."] };
-  if (type === "bank" && (digits.length < 6 || digits.length > 19))
-    return { level: "warn", title: "Số tài khoản không hợp lệ", target: input, score: 50, reasons: ["Số tài khoản thường có từ 6 đến 19 chữ số."] };
+// ======================================================================
+// Hiển thị (dịch theo Language, chỉ dùng dữ liệu đã escape)
+// ======================================================================
+const T = (key, vars) => esc(Language.t(key, vars));
 
-  const norm = type === "phone" ? digits.replace(/^84/, "0") : digits;
-  const reports = getReports().filter((r) => r.type === type && r.target.replace(/\D/g, "").replace(/^84/, "0") === norm);
-  if (BLACKLIST[type].includes(norm) || reports.length) {
-    const n = reports.length + (BLACKLIST[type].includes(norm) ? 7 + (norm.length % 9) : 0);
-    return { level: "danger", title: `NGUY HIỂM – ${label} bị báo cáo lừa đảo`, target: norm, score: 100,
-      reasons: [`Đã có ${n} báo cáo từ cộng đồng.`, type === "phone" ? "Không nghe máy, không làm theo hướng dẫn, chặn số này." : "Tuyệt đối không chuyển tiền vào tài khoản này."] };
-  }
-  return { level: "safe", title: `${label} chưa bị báo cáo`, target: norm, score: 0,
-    reasons: ["Chưa có trong cơ sở dữ liệu báo cáo.", "Nếu bị yêu cầu chuyển tiền gấp, hãy dừng lại và xác minh qua kênh khác."] };
+// Tiêu đề kết quả theo trạng thái — tương ứng URL_TITLES và các tiêu đề trong mergeAiResult / analyzeUrl.
+function resultTitle(r) {
+  if (!r.parsed) return Language.t("titleInvalid");
+  if (r.ai?.status === "DomainNotFound") return Language.t("titleNotFound");
+  return Language.t({ danger: "titleDanger", warn: "titleWarn", safe: "titleSafe" }[r.level]);
 }
 
 // Hiển thị URL đã tách theo cấu trúc: tên miền phụ | tên miền chính | đuôi | đường dẫn.
 function renderUrlParts(p) {
-  const part = (cls, label, text) => (text ? `<span class="up ${cls}" title="${label}"><small>${label}</small>${esc(text)}</span>` : "");
+  const part = (cls, key, text) => (text ? `<span class="up ${cls}" title="${T(key)}"><small>${T(key)}</small>${esc(text)}</span>` : "");
   const parts = p.isIp
-    ? part("up-dom", "địa chỉ IP", p.host)
-    : part("up-sub", "tên miền phụ", p.sub) + part("up-dom", "tên miền chính", p.domLabel) + part("up-suf", "đuôi", p.suffix);
-  const uni = p.hostUnicode !== p.host ? `<div class="small muted">Hiển thị thật: <b>${esc(p.hostUnicode)}</b></div>` : "";
-  return `<div class="url-parts">${parts}${part("up-path", "đường dẫn", (p.path + p.query).slice(0, 80))}</div>${uni}`;
+    ? part("up-dom", "partIp", p.host)
+    : part("up-sub", "partSub", p.sub) + part("up-dom", "partDom", p.domLabel) + part("up-suf", "partSuf", p.suffix);
+  const uni = p.hostUnicode !== p.host ? `<p class="up-unicode">${T("realDisplay")}: <b>${esc(p.hostUnicode)}</b></p>` : "";
+  return `<div class="url-parts">${parts}${part("up-path", "partPath", (p.path + p.query).slice(0, 80))}</div>${uni}`;
 }
 
 // Mỗi lý do là một thanh đóng góp (+ đẩy về lừa đảo, − đẩy về an toàn), giống biểu đồ SHAP.
 function renderContributions(r) {
   const fromAi = r.aiState === "ok";
-  const heading = fromAi ? "Dấu hiệu nhận thấy trong đường link" : "Vì sao có kết quả này?";
+  const heading = T(fromAi ? "whyAi" : "whyRules");
   if (!r.reasons.length)
-    return `<h4>${heading}</h4><p class="small" style="margin:6px 0 0">Bộ quy tắc không phát hiện đặc trưng bất thường nào. Kết quả không đảm bảo an toàn tuyệt đối – hãy kiểm tra kỹ trước khi nhập thông tin.</p>`;
+    return `<section class="r-block"><h4>${heading}</h4><p class="r-note">${T("noSignals")}</p></section>`;
   const max = Math.max(...r.reasons.map((x) => Math.abs(x.value)), 3);
   const rows = r.reasons.map((x) => {
     const w = (Math.abs(x.value) / max) * 100;
     const bar = `<i style="width:${w}%"></i>`;
     return `<div class="c-row ${x.value > 0 ? "pos" : "neg"}">
-      <span class="c-text">${esc(x.text)} <small class="c-group">${esc(x.group)}</small></span>
-      <span class="c-bar"><span class="c-left">${x.value < 0 ? bar : ""}</span><span class="c-right">${x.value > 0 ? bar : ""}</span></span>
+      <span class="c-text">${esc(Language.reason(x, r.parsed))} <small class="c-group">${esc(Language.group(x.group))}</small></span>
+      <span class="c-bar" aria-hidden="true"><span class="c-left">${x.value < 0 ? bar : ""}</span><span class="c-right">${x.value > 0 ? bar : ""}</span></span>
       <b class="c-val">${x.value > 0 ? "+" : "−"}${Math.abs(x.value)}</b>
     </div>`;
   }).join("");
-  const note = fromAi
-    ? `Phần giải thích do bộ quy tắc trên trình duyệt đưa ra (bộ quy tắc tự chấm: ${r.ruleScore}%); kết luận phía trên là của model AI.`
-    : "Thanh đỏ đẩy về phía lừa đảo, thanh xanh đẩy về phía an toàn.";
-  return `<h4>${heading}</h4><div class="contrib">${rows}</div>
-    <p class="small muted" style="margin:8px 0 0">${note} F1: cấu trúc · F2: từ khoá theo vị trí · F4: giả mạo thương hiệu.</p>`;
+  const note = fromAi ? T("contribNoteAi", { score: r.ruleScore }) : T("contribNoteRules");
+  return `<section class="r-block"><h4>${heading}</h4><div class="contrib">${rows}</div>
+    <p class="r-note">${note} ${T("contribLegend")}</p></section>`;
 }
 
 // Dòng trạng thái model AI ngay dưới tiêu đề kết quả.
 function renderAiLine(r) {
   if (r.aiState === "pending")
-    return `<p class="ai-line pending"><span class="spinner"></span>Đang hỏi model AI… Tạm hiện kết quả của bộ quy tắc trên trình duyệt.</p>`;
+    return `<div class="ai-line pending"><span class="spinner" aria-hidden="true"></span><span>${T("aiPending")}<br><small>${T("aiPendingHint")}</small></span></div>`;
   if (r.aiState === "fail")
-    return `<p class="ai-line fail">⚠️ Chưa dùng được model AI (${esc(r.aiError || "lỗi không xác định")}). Kết quả dưới đây chỉ từ bộ quy tắc trên trình duyệt.</p>`;
+    return `<div class="ai-line fail">${ico("alert")}<span>${T("aiFail", { error: Language.aiError(r) })}</span>
+      <button type="button" class="btn btn-ghost btn-xs" data-action="retry-ai">${ico("refresh")}<span>${T("aiRetry")}</span></button></div>`;
   if (r.aiState !== "ok") return "";
   const ai = r.ai;
   const tr = ai.technical_report || {};
-  const chips = [`<span class="ai-chip">🤖 Nguồn: ${esc(AI_SOURCES[ai.source] || ai.source || "Không rõ")}</span>`];
-  if (ai.risk_level) chips.push(`<span class="ai-chip">Mức rủi ro: ${esc(ai.risk_level)}</span>`);
+  const chips = [`<span class="ai-chip">${ico("cpu")}${T("chipSource", { src: Language.source(ai.source) })}</span>`];
+  if (ai.risk_level) chips.push(`<span class="ai-chip" title="risk_level: ${esc(ai.risk_level)}">${T("chipRisk", { risk: Language.risk(ai.risk_level) })}</span>`);
   if (tr.nn_probability !== undefined && tr.nn_probability !== null)
-    chips.push(`<span class="ai-chip" title="Xác suất của riêng mạng nơ-ron trước khi xếp chồng XGBoost">NN: ${(Number(tr.nn_probability) * 100).toFixed(1)}%</span>`);
+    chips.push(`<span class="ai-chip" title="${T("chipNnTip")}">${T("chipNn", { p: (Number(tr.nn_probability) * 100).toFixed(1) })}</span>`);
   if (r.ruleLevel && r.ruleLevel !== r.level && r.score !== null)
-    chips.push(`<span class="ai-chip muted-chip" title="Bộ quy tắc trên trình duyệt cho kết quả khác model AI">Bộ quy tắc: ${r.ruleScore}%</span>`);
+    chips.push(`<span class="ai-chip muted-chip" title="${T("chipRulesTip")}">${T("chipRules", { score: r.ruleScore })}</span>`);
   return `<div class="ai-line ok">${chips.join("")}</div>`;
 }
 
 // ---------- Thông tin tên miền chi tiết (domain_info của backend) ----------
-const DI_NF = "Không tìm thấy";
-const diVal = (v) => (v === null || v === undefined || v === "" ? DI_NF : v);
-const diList = (a) => (a && a.length ? a.join(", ") : DI_NF);
-function diDate(iso) {
-  if (!iso) return DI_NF;
-  const d = new Date(iso + (String(iso).length === 10 ? "T00:00:00" : ""));
-  return isNaN(d) ? iso : d.toLocaleDateString("vi-VN");
-}
-
 function renderDomainInfo(info) {
   if (!info) return "";
+  const NF = Language.t("diNotFound");
+  const val = (v) => (v === null || v === undefined || v === "" ? NF : v);
+  const list = (a) => (a && a.length ? a.join(", ") : NF);
+  const has = (v) => v !== null && v !== undefined;
+  const date = (iso) => {
+    if (!iso) return NF;
+    const d = new Date(iso + (String(iso).length === 10 ? "T00:00:00" : ""));
+    return isNaN(d) ? iso : d.toLocaleDateString(Language.locale());
+  };
   const dns = info.dns || {}, whois = info.whois || {}, tls = info.tls || {}, http = info.http || {};
-  const status = { active: "Đang hoạt động", inactive: "Không hoạt động", nonexistent: "Không tồn tại" }[info.status] || DI_NF;
+  const statusKey = { active: "diActive", inactive: "diInactive", nonexistent: "diNonexistent" }[info.status];
   const ip = http.ip_info;
   const ipInfo = ip ? [[ip.city, ip.region, ip.country].filter(Boolean).join(", "), ip.isp, ip.asn].filter(Boolean).join(" — ") : "";
+  const L = (k) => Language.t(k);
   const groups = [
-    ["Tổng quan", [
-      ["Tên miền", diVal(info.domain)], ["Máy chủ (host)", diVal(info.host)], ["Trạng thái", status],
+    [L("diOverview"), [
+      [L("diDomain"), val(info.domain)], [L("diHost"), val(info.host)], [L("diStatus"), statusKey ? L(statusKey) : NF],
     ]],
     ["WHOIS", [
-      ["Ngày đăng ký", diDate(whois.created)], ["Ngày hết hạn", diDate(whois.expires)],
-      ["Cập nhật", diDate(whois.updated)], ["Nhà đăng ký", diVal(whois.registrar)],
-      ["Tuổi tên miền", whois.age_days !== null && whois.age_days !== undefined ? `${fmt(whois.age_days)} ngày` : DI_NF],
-      ["Name server", diList(whois.name_servers)],
+      [L("diCreated"), date(whois.created)], [L("diExpires"), date(whois.expires)],
+      [L("diUpdated"), date(whois.updated)], [L("diRegistrar"), val(whois.registrar)],
+      [L("diAge"), has(whois.age_days) ? Language.t("diDays", { n: fmt(whois.age_days) }) : NF],
+      [L("diNs"), list(whois.name_servers)],
     ]],
-    ["Chứng chỉ TLS", [
-      ["Hợp lệ", !tls.checked ? DI_NF : tls.valid === true ? "Hợp lệ" : tls.valid === false ? "Không hợp lệ" : DI_NF],
-      ["Tổ chức cấp", diVal(tls.issuer)], ["Hết hạn", diDate(tls.expires)],
-      ["Thời hạn", tls.days_left !== null && tls.days_left !== undefined ? (tls.days_left >= 0 ? `Còn ${tls.days_left} ngày` : `Hết hạn ${-tls.days_left} ngày trước`) : DI_NF],
-      ["Phiên bản", diVal(tls.tls_version)],
+    [L("diTls"), [
+      [L("diValid"), !tls.checked ? NF : tls.valid === true ? L("diValidYes") : tls.valid === false ? L("diValidNo") : NF],
+      [L("diIssuer"), val(tls.issuer)], [L("diTlsExpires"), date(tls.expires)],
+      [L("diValidity"), has(tls.days_left) ? (tls.days_left >= 0 ? Language.t("diDaysLeft", { n: tls.days_left }) : Language.t("diExpiredAgo", { n: -tls.days_left })) : NF],
+      [L("diVersion"), val(tls.tls_version)],
     ]],
     ["HTTP", [
-      ["Truy cập được", http.reachable === true ? "Có" : http.reachable === false ? `Không (${http.error || "lỗi kết nối"})` : DI_NF],
-      ["Mã trạng thái", http.status_code !== null && http.status_code !== undefined ? String(http.status_code) : DI_NF],
-      ["URL cuối cùng", diVal(http.final_url)],
-      ["Chuyển hướng", http.redirects && http.redirects.length ? http.redirects.join(" → ") : "Không có"],
-      ["Máy chủ web", diVal(http.server)],
-      ["Thời gian phản hồi", http.response_time_ms !== null && http.response_time_ms !== undefined ? `${fmt(http.response_time_ms)} ms` : DI_NF],
-      ["Địa chỉ IP", diVal(http.resolved_ip)], ["Vị trí / nhà mạng", ipInfo || DI_NF],
+      [L("diReachable"), http.reachable === true ? L("diYes") : http.reachable === false ? Language.t("diUnreachable", { error: http.error || L("diConnError") }) : NF],
+      [L("diStatusCode"), has(http.status_code) ? String(http.status_code) : NF],
+      [L("diFinalUrl"), val(http.final_url)],
+      [L("diRedirects"), http.redirects && http.redirects.length ? http.redirects.join(" → ") : L("diNoRedirect")],
+      [L("diServer"), val(http.server)],
+      [L("diResponse"), has(http.response_time_ms) ? Language.t("diMs", { n: fmt(http.response_time_ms) }) : NF],
+      [L("diIp"), val(http.resolved_ip)], [L("diGeo"), ipInfo || NF],
     ]],
     ["DNS", [
-      ["A", diList(dns.a)], ["AAAA", diList(dns.aaaa)], ["MX", diList(dns.mx)], ["NS", diList(dns.ns)],
-      ["SPF", diVal(dns.spf)], ["DMARC", dns.dmarc ? (dns.dmarc.policy ? `p=${dns.dmarc.policy}` : diVal(dns.dmarc.record)) : DI_NF],
-      ["DNSSEC", dns.dnssec ? (dns.dnssec.enabled ? "Có" : "Không") : DI_NF],
+      ["A", list(dns.a)], ["AAAA", list(dns.aaaa)], ["MX", list(dns.mx)], ["NS", list(dns.ns)],
+      ["SPF", val(dns.spf)], ["DMARC", dns.dmarc ? (dns.dmarc.policy ? `p=${dns.dmarc.policy}` : val(dns.dmarc.record)) : NF],
+      ["DNSSEC", dns.dnssec ? (dns.dnssec.enabled ? L("diYes") : L("diNo")) : NF],
     ]],
   ];
   const body = groups.map(([title, rows]) => `
     <div class="di-group">
-      <h5 class="mono">${title}</h5>
-      <dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd class="${v === DI_NF ? "nf" : ""}">${esc(v)}</dd>`).join("")}</dl>
+      <h5>${esc(title)}</h5>
+      <dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd class="${v === NF ? "nf" : ""}">${esc(v)}</dd>`).join("")}</dl>
     </div>`).join("");
-  return `<details class="di"><summary>🌐 Thông tin tên miền chi tiết <small class="muted">DNS · WHOIS · TLS · HTTP</small></summary><div class="di-body">${body}</div></details>`;
+  return `<details class="di"><summary>${ico("globe")}<span>${T("diSummary")}</span> <small>DNS · WHOIS · TLS · HTTP</small></summary><div class="di-body">${body}</div></details>`;
 }
 
-// Vẽ kết quả kiểm tra vào box. type: url | phone | bank; value: chuỗi người dùng nhập.
+// Vẽ kết quả kiểm tra vào box. type giữ để tương thích (luôn là "url"); value: chuỗi người dùng nhập.
 function renderScanResult(box, r, type, value) {
-  const icon = r.ai?.status === "DomainNotFound" ? "🚫" : { danger: "⛔", warn: "⚠️", safe: "✅" }[r.level];
-  const color = { danger: "var(--danger)", warn: "var(--warn)", safe: "var(--safe)" }[r.level];
-  const reportHref = `bao-cao.html?kind=${type}&subject=${encodeURIComponent(value)}`;
+  const notFound = r.ai?.status === "DomainNotFound";
+  const iconName = notFound ? "ban" : { danger: "octagon", warn: "alert", safe: "shieldCheck" }[r.level];
+  const kicker = !r.parsed ? "kickerPlain" : { pending: "kickerPending", fail: "kickerFail", ok: "kickerOk" }[r.aiState] || "kickerPlain";
+  const reportHref = `bao-cao.html?kind=${encodeURIComponent(type || "url")}&subject=${encodeURIComponent(value)}`;
   const hasScore = r.score !== null && r.score !== undefined;
-  box.className = "result " + r.level + (r.aiState === "pending" ? " is-pending" : "");
+  const fromAi = r.aiState === "ok";
+  const wasOpen = box.querySelector("details.di")?.open; // giữ trạng thái mở khi vẽ lại (đổi ngôn ngữ)
+
+  const scoreBlock = hasScore && r.parsed ? `
+    <div class="r-score ${fromAi ? "is-ai" : "is-rules"}">
+      <div class="r-score-head">
+        <span>${T(fromAi ? "probAi" : "scoreRules")}</span>
+        <b class="mono">${fromAi ? `${r.score}%` : `${r.score}/100`}</b>
+      </div>
+      <div class="score-bar" role="img" aria-label="${T(fromAi ? "probAi" : "scoreRules")}: ${fromAi ? `${r.score}%` : `${r.score}/100`}"><i style="width:${Math.max(r.score, 4)}%"></i></div>
+    </div>` : "";
+
+  box.className = `result ${r.level}${r.aiState === "pending" ? " is-pending" : ""}${notFound ? " is-notfound" : ""}`;
   box.innerHTML = `
-    <h3>${icon} ${esc(r.title)}</h3>
+    <div class="r-head">
+      <span class="r-icon">${ico(iconName)}</span>
+      <div class="r-headings">
+        <p class="r-kicker">${T(kicker)}</p>
+        <h3 id="resultTitle">${esc(resultTitle(r))}</h3>
+        ${r.parsed ? `<p class="r-target mono">${esc(r.parsed.hostUnicode || r.target)}</p>` : `<p class="r-target">${T("targetLabel")}: <b class="mono">${esc(r.target ?? value)}</b></p>`}
+      </div>
+    </div>
     ${r.parsed ? renderAiLine(r) : ""}
-    ${r.ai?.warning ? `<p class="di-warning">⚠️ ${esc(r.ai.warning)}</p>` : ""}
-    ${r.aiMessage ? `<p class="small" style="margin:8px 0 0">${esc(r.aiMessage)}</p>` : ""}
-    ${r.parsed ? renderUrlParts(r.parsed) : r.target ? `<div class="muted small">Đối tượng: <b>${esc(r.target)}</b></div>` : ""}
-    ${hasScore ? `<div class="score-bar"><i style="width:${Math.max(r.score, 4)}%;background:${color}"></i></div>
-    <div class="small muted">${r.parsed ? (r.aiState === "ok" ? "Xác suất lừa đảo (model AI)" : "Xác suất lừa đảo (bộ quy tắc)") : "Mức độ rủi ro"}: ${r.score}${r.parsed ? "%" : "/100"}</div>` : ""}
-    ${r.parsed ? renderContributions(r) : `<ul>${r.reasons.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`}
+    ${r.ai?.warning ? `<p class="di-warning">${ico("alert")}<span>${esc(Language.aiWarning(r.ai.warning))}</span></p>` : ""}
+    ${notFound ? `<p class="r-message">${esc(Language.domainNotFound(r.ai, r.parsed?.host))}</p>` : ""}
+    ${r.parsed ? renderUrlParts(r.parsed) : ""}
+    ${scoreBlock}
+    ${r.parsed ? renderContributions(r) : `<ul class="r-list"><li>${T("invalidReason")}</li></ul>`}
     ${r.ai ? renderDomainInfo(r.ai.domain_info) : ""}
-    ${r.level !== "danger" ? `<p class="small" style="margin:10px 0 0">Bạn nghi ngờ đối tượng này? <a href="${reportHref}">Gửi báo cáo →</a></p>` : ""}`;
+    ${r.parsed && r.level !== "danger" ? `<p class="r-report">${T("reportPrompt")} <a href="${reportHref}">${T("reportLink")} ${ico("arrowRight")}</a></p>` : ""}`;
+  if (wasOpen) box.querySelector("details.di")?.setAttribute("open", "");
+  box.setAttribute("aria-labelledby", "resultTitle");
   box.hidden = false;
 }

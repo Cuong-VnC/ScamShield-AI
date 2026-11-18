@@ -28,6 +28,12 @@ const AiApi = (() => {
   }
   const BASE = resolveBase();
 
+  // [redesign] Lỗi mang thêm `code` (timeout | network | http | invalid | detail) để giao diện
+  // dịch VI/EN; `message` tiếng Việt giữ nguyên như bản gốc để tương thích.
+  function apiError(code, message, extra) {
+    return Object.assign(new Error(message), { code }, extra);
+  }
+
   async function fetchJson(path, opts, timeout) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeout);
@@ -37,13 +43,15 @@ const AiApi = (() => {
       try { data = await res.json(); } catch {}
       if (!res.ok) {
         const detail = data && data.detail;
-        throw new Error(typeof detail === "string" ? detail : `Máy chủ trả về lỗi HTTP ${res.status}`);
+        throw typeof detail === "string"
+          ? apiError("detail", detail, { status: res.status, detail })
+          : apiError("http", `Máy chủ trả về lỗi HTTP ${res.status}`, { status: res.status });
       }
-      if (!data) throw new Error("Dữ liệu trả về không hợp lệ.");
+      if (!data) throw apiError("invalid", "Dữ liệu trả về không hợp lệ.");
       return data;
     } catch (e) {
-      if (e.name === "AbortError") throw new Error("Máy chủ phản hồi quá chậm (có thể đang khởi động lại).");
-      if (e instanceof TypeError) throw new Error("Không kết nối được máy chủ model AI.");
+      if (e.name === "AbortError") throw apiError("timeout", "Máy chủ phản hồi quá chậm (có thể đang khởi động lại).");
+      if (e instanceof TypeError) throw apiError("network", "Không kết nối được máy chủ model AI.");
       throw e;
     } finally {
       clearTimeout(t);
@@ -51,11 +59,13 @@ const AiApi = (() => {
   }
 
   // Gọi một lần dùng chung cho cả trang; cũng giúp "đánh thức" máy chủ Render sớm.
+  // [redesign] health({ force: true }) hỏi lại máy chủ (dùng khi Render đang khởi động lại).
   let healthPromise = null;
-  function health() {
+  function health(opts = {}) {
+    if (opts.force) healthPromise = null;
     healthPromise ??= fetchJson("/health", {}, HEALTH_TIMEOUT).then(
       (d) => ({ ok: Boolean(d.models_loaded), data: d }),
-      (e) => ({ ok: false, error: e.message })
+      (e) => ({ ok: false, error: e.message, code: e.code })
     );
     return healthPromise;
   }
