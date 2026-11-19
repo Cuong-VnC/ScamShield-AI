@@ -1,18 +1,23 @@
 import pandas as pd
-import os
 from supabase import create_client, Client
-from dotenv import load_dotenv
-import math
 
-# Load cấu hình
-load_dotenv()
-url: str = os.getenv("SUPABASE_URL")
-key: str = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(url, key)
+from env_config import get_supabase_config
+
+
+def get_supabase_client() -> Client:
+    """Tạo client từ SUPABASE_URL / SUPABASE_KEY (xem env_config.py, .env.example).
+    Script này GHI vào bảng url_cache nên key phải có quyền insert/update."""
+    url, key = get_supabase_config()
+    if not url or not key:
+        raise SystemExit("❌ Thiếu SUPABASE_URL hoặc SUPABASE_KEY. Điền vào file .env "
+                         "ở thư mục gốc repo (mẫu: .env.example) rồi chạy lại.")
+    return create_client(url, key)
+
 
 def upload_csv_to_supabase(file_path: str):
+    supabase = get_supabase_client()
     print(f"📂 Đang đọc file: {file_path}")
-    
+
     # Đọc CSV
     df = pd.read_csv(file_path)
     

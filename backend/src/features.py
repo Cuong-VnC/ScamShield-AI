@@ -19,14 +19,12 @@ tinh tu URL DA SKELETONIZE (giai ma punycode + map confusable ve Latin);
 GOC, khong bao gio so tren skeleton. F2 (TF-IDF + SVD 128 chieu) cung dung
 URL DA SKELETONIZE.
 """
-import tldextract
 import re
 import json
 import math
-import socket
 import unicodedata
-import whois
-from datetime import datetime
+
+from domain_info import extract_domain_parts
 
 try:
     import Levenshtein
@@ -786,16 +784,18 @@ def f2_doc(url):
     return " ".join(f2_tokens(url))
 
 
-def get_advanced_insights(url):
-    """Truy vấn mạng thực tế (WHOIS, DNS) để hiển thị báo cáo Web."""
+def get_advanced_insights(url, domain_info):
+    """Dùng lại kết quả WHOIS/DNS đã thu thập cho báo cáo Web."""
     url = str(url).lower().strip()
-    ext = tldextract.extract(url)
-    domain = f"{ext.domain}.{ext.suffix}"
+    ext = extract_domain_parts(url)
+    age = domain_info["whois"].get("age_days")
+    dns = domain_info["dns"]
 
     insights = {
-        "domain_age_days": "N/A",
-        "is_new_domain": False,
-        "dns_status": "Invalid",
+        "domain_age_days": age if age is not None else "N/A",
+        "is_new_domain": age is None or age < 180,
+        "dns_status": "Valid" if dns.get("a") or dns.get("aaaa") or dns.get("status") == "skipped_ip"
+                      else "No DNS record",
         "impersonation_risk": "Low",
         "is_shortened": False
     }
@@ -805,32 +805,7 @@ def get_advanced_insights(url):
     if any(s in url for s in shorteners):
         insights['is_shortened'] = True
 
-    # 2. Truy vấn WHOIS
-    try:
-        # Timeout 5s để tránh treo server nếu API WHOIS chậm
-        w = whois.whois(domain)
-        creation_date = w.creation_date
-        if isinstance(creation_date, list):
-            creation_date = creation_date[0]
-
-        if creation_date and isinstance(creation_date, datetime):
-            age = (datetime.now() - creation_date).days
-            insights['domain_age_days'] = age
-            # Domain < 6 tháng được coi là mới/nguy hiểm
-            if age < 180:
-                insights['is_new_domain'] = True
-    except:
-        # Nếu lấy được WHOIS, thường là domain rác/mới đăng ký chưa cập nhật
-        insights['is_new_domain'] = True
-
-    # 3. Kiểm tra DNS
-    try:
-        socket.gethostbyname(domain)
-        insights['dns_status'] = "Valid"
-    except:
-        insights['dns_status'] = "No DNS record"
-
-    # 4. Độ tương đồng thương hiệu (Levenshtein)
+    # Độ tương đồng thương hiệu (Levenshtein)
     min_dist = 999
     matched_brand = ""
     for brand in TOP_BRANDS:

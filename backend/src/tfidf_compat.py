@@ -14,6 +14,7 @@ Hàm này an toàn khi chạy trên mọi phiên bản: nếu idf_ đã đọc �
 bình thường thì không làm gì cả.
 """
 
+import logging
 import pickle  # noqa: F401  (giữ import rõ ràng cho test dùng chung module)
 
 
@@ -41,6 +42,7 @@ def repair_tfidf_idf(vec):
         # Kiểm chứng sửa xong đọc được idf_
         _ = inner.idf_
         return True
-    except Exception as e:
-        print(f"⚠️ Không sửa được TF-IDF compat: {e}")
+    except Exception as exc:
+        logging.getLogger("uvicorn.error.scamshield").warning(
+            "tfidf_repair_failed exception_type=%s", type(exc).__name__)
         return False

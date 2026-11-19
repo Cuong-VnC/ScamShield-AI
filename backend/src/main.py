@@ -1,22 +1,19 @@
 import os
 import sys
 import json
+import logging
 import pickle
-import numpy as np
-import xgboost as xgb
 import requests
 import re
 from urllib.parse import urlparse
-import socket
-import ipaddress
-from fastapi import FastAPI, HTTPException
+from threading import Lock
+from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 
 # --- CẤU HÌNH KERAS ---
 os.environ["KERAS_BACKEND"] = "tensorflow"
-
-from keras.models import load_model
 
 # Thiết lập đường dẫn
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -28,11 +25,38 @@ from features import (extract_features, registrable_domain, get_advanced_insight
                       load_tokenizer_json, texts_to_char_sequences, pad_post, FEATURE_NAMES,
                       skeletonize, f2_doc)
 from tfidf_compat import repair_tfidf_idf
+import env_config  # noqa: F401 — nạp .env (local) trước khi đọc URLHAUS_API_KEY / GOOGLE_SAFE_BROWSING_API_KEY
 from database import check_url_in_db
 from domain_info import get_domain_info, resolve_dns
+from network_safety import UnsafeTarget, public_addresses
+from api_protection import ApiError, RequestProtection, analysis_slot, error_response, log_failure, logger
+from public_stats import router as stats_router
 
 app = FastAPI()
+app.add_middleware(RequestProtection)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.include_router(stats_router)
+
+# Access logs include the query string. RequestProtection logs fixed routes and IDs.
+logging.getLogger("uvicorn.access").disabled = True
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.ERROR)
+_inference_lock = Lock()
+
+
+@app.exception_handler(ApiError)
+async def handle_api_error(_, exc):
+    return error_response(exc.status_code, exc.detail, exc.code, exc.headers)
+
+
+@app.exception_handler(RequestValidationError)
+async def handle_validation_error(_, exc):
+    # Keep FastAPI's detail array without the raw request input or validator context.
+    detail = [{"loc": error["loc"], "type": error["type"], "msg": "Invalid request"}
+              for error in exc.errors()]
+    return error_response(422, detail, "INVALID_REQUEST")
+
 
 # Load Models (pipeline notebook dataset_url_06 v8: NN -> XGBoost stack 170 cot)
 # 7 artifacts trong backend/models: phishing_nn.keras, xgb_model.json,
@@ -48,8 +72,12 @@ META = {"threshold": 0.45, "max_len": 200, "trusted_domains": set(), "feature_na
 
 
 def load_all_models():
-    global model_nn, model_xgb, tokenizer_index, tokenizer_oov, scaler, META, tfidf_f2, svd_f2
+    global np, model_nn, model_xgb, tokenizer_index, tokenizer_oov, scaler, META, tfidf_f2, svd_f2
     try:
+        import numpy as np
+        import xgboost as xgb
+        from keras.models import load_model
+
         with open(os.path.join(MODEL_DIR, "meta.json"), encoding="utf-8") as f:
             meta = json.load(f)
         META = {
@@ -59,7 +87,7 @@ def load_all_models():
             "feature_names": meta.get("feature_names", FEATURE_NAMES),
         }
         if len(META["feature_names"]) != 41:
-            print(f"⚠️ Cảnh báo: meta.json có {len(META['feature_names'])} features, kỳ vọng 41")
+            logger.warning("model_feature_count expected=41 actual=%d", len(META["feature_names"]))
         tokenizer_index, tokenizer_oov = load_tokenizer_json(os.path.join(MODEL_DIR, "tokenizer.json"))
         with open(os.path.join(MODEL_DIR, "scaler.pkl"), "rb") as f:
             scaler = pickle.load(f)
@@ -70,44 +98,47 @@ def load_all_models():
         # được (đọc qua _idf_diag) -> transform() lỗi "idf vector is not
         # fitted". Dựng lại _idf_diag từ mảng idf đã lưu (no-op trên 1.6.1).
         if not repair_tfidf_idf(tfidf_f2):
-            print("⚠️ Cảnh báo: không sửa được TF-IDF compat, /predict có thể lỗi idf")
+            logger.warning("tfidf_repair_failed")
+            return False
         with open(os.path.join(MODEL_DIR, "svd_f2.pkl"), "rb") as f:
             svd_f2 = pickle.load(f)
         model_xgb = xgb.XGBClassifier()
         model_xgb.load_model(os.path.join(MODEL_DIR, "xgb_model.json"))
         model_nn = load_model(os.path.join(MODEL_DIR, "phishing_nn.keras"))
-        print(f"✅ Đã nạp pipeline v8: NN + XGBoost, threshold={META['threshold']}, "
-              f"whitelist={len(META['trusted_domains'])} domains")
+        logger.info("model_v8_loaded threshold=%s whitelist_size=%d",
+                    META["threshold"], len(META["trusted_domains"]))
         return True
-    except Exception as e:
-        print(f"❌ LỖI NẠP MODEL: {e}")
+    except Exception as exc:
+        log_failure("model_load_failed", exc, level=logging.ERROR)
         return False
 
 
 load_all_models()
 
 
+def _models_loaded():
+    return all(model is not None for model in
+               (model_nn, model_xgb, tokenizer_index, scaler, tfidf_f2, svd_f2))
+
+
 @app.get("/health")
 async def health():
-    """Kiểm tra nhanh service và trạng thái nạp model (dùng cho Render health check)."""
-    loaded = all(v is not None for v in [model_nn, model_xgb, tokenizer_index, scaler,
-                                         tfidf_f2, svd_f2])
+    """Liveness của tiến trình và trạng thái model, giữ HTTP 200 cho Render."""
+    loaded = _models_loaded()
     return {"status": "ok" if loaded else "degraded",
             "models_loaded": loaded,
             "threshold": META["threshold"]}
 
 
-# --- 🛡️ BẢO MẬT: OWASP TOP 10 (SSRF & Input Validation) ---
-def is_safe_url(url: str) -> bool:
+def _require_public_target(host, dns_result):
+    """Reject blocked destinations before analysis. Probes use this DNS snapshot."""
+    status, records = dns_result
     try:
-        parsed = urlparse(url)
-        if parsed.scheme not in ["http", "https"]: return False
-        hostname = parsed.hostname
-        if not hostname: return False
-        ip = socket.gethostbyname(hostname)
-        ip_obj = ipaddress.ip_address(ip)
-        return not (ip_obj.is_loopback or ip_obj.is_private or ip_obj.is_link_local)
-    except: return False
+        if status == "blocked":
+            raise UnsafeTarget("non-public address")
+        public_addresses(host, records)
+    except UnsafeTarget:
+        raise ApiError(400, "URL blocked for security reasons", "URL_BLOCKED") from None
 
 
 # --- ✅ VALIDATION ĐỊNH DẠNG URL (lỗi nhập liệu rõ ràng, riêng với lỗi SSRF) ---
@@ -137,6 +168,18 @@ def validate_url_format(url: str):
     return True, ""
 
 
+def _normalize_target(raw):
+    if not raw or len(raw) > 2048:
+        raise ApiError(400, "URL invalid or too long", "INVALID_REQUEST")
+    processed = raw.lower()
+    if not re.match(r"^[a-z][a-z0-9+.-]*://", processed):
+        processed = "http://" + processed
+    ok, reason = validate_url_format(processed)
+    if not ok:
+        raise ApiError(400, f"URL không đúng định dạng: {reason}", "INVALID_URL")
+    return processed
+
+
 def _attach_domain_info(resp: dict, info: dict):
     """Thêm domain_info / domain_status / warning vào response, giữ nguyên
     mọi trường cũ (frontend cũ và deployment hiện tại không vỡ)."""
@@ -163,18 +206,17 @@ def _attach_domain_info(resp: dict, info: dict):
 
 
 @app.get("/domain-info")
-async def domain_info_endpoint(url: str = ""):
+def domain_info_endpoint(url: str = ""):
     """Kiểm tra chi tiết tên miền: DNS / WHOIS / TLS / HTTP (fail-soft)."""
-    raw = (url or "").strip()
-    if not raw:
-        raise HTTPException(status_code=400, detail="Thiếu tham số url")
-    processed = raw.lower() if raw.startswith("http") else "http://" + raw.lower()
-    ok, reason = validate_url_format(processed)
-    if not ok:
-        raise HTTPException(status_code=400, detail=f"URL không đúng định dạng: {reason}")
-    if not is_safe_url(processed):
-        raise HTTPException(status_code=400, detail="URL blocked for security reasons")
-    return {"url": raw, "domain_info": get_domain_info(processed)}
+    with analysis_slot():
+        raw = url.strip()
+        if not raw:
+            raise ApiError(400, "Thiếu tham số url", "INVALID_REQUEST")
+        processed = _normalize_target(raw)
+        host = urlparse(processed).hostname
+        dns_result = resolve_dns(host)
+        _require_public_target(host, dns_result)
+        return {"url": raw, "domain_info": get_domain_info(processed, dns_result=dns_result)}
 
 
 class URLRequest(BaseModel):
@@ -183,8 +225,11 @@ class URLRequest(BaseModel):
     @classmethod
     def validate_input(cls, v):
         v = v.strip()
-        if not v or len(v) > 2048: raise ValueError('URL invalid or too long')
+        if len(v) > 2048:
+            raise ValueError("URL invalid or too long")
         v = re.sub(r'[<>\"\'\s]', '', v)
+        if not v:
+            raise ValueError("URL invalid or too long")
         return v
 
 
@@ -193,7 +238,6 @@ def check_urlhaus(url: str):
     """Truy vấn URLhaus API sử dụng Auth-Key bắt buộc."""
     api_key = os.getenv("URLHAUS_API_KEY")
     if not api_key:
-        print("⚠️ Cảnh báo: Thiếu URLHAUS_API_KEY trong .env")
         return None
 
     endpoint = "https://urlhaus-api.abuse.ch/v1/url/"
@@ -201,7 +245,7 @@ def check_urlhaus(url: str):
     data = {'url': url}
 
     try:
-        response = requests.post(endpoint, data=data, headers=headers, timeout=5)
+        response = requests.post(endpoint, data=data, headers=headers, timeout=5, allow_redirects=False)
         res_json = response.json()
         if res_json.get('query_status') == 'ok':
             return {
@@ -216,7 +260,9 @@ def check_urlhaus(url: str):
                 "source": "urlhaus_database"
             }
         return None
-    except: return None
+    except (requests.RequestException, ValueError, AttributeError) as exc:
+        log_failure("urlhaus_lookup_failed", exc)
+        return None
 
 
 # --- 🔍 TẦNG TRUY VẤN: GOOGLE SAFE BROWSING ---
@@ -234,7 +280,7 @@ def check_google_safe_browsing(url: str):
         }
     }
     try:
-        r = requests.post(endpoint, json=payload, timeout=5)
+        r = requests.post(endpoint, json=payload, timeout=5, allow_redirects=False)
         data = r.json()
         if "matches" in data:
             return {
@@ -243,7 +289,9 @@ def check_google_safe_browsing(url: str):
                 "source": "google_safe_browsing"
             }
         return None
-    except: return None
+    except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as exc:
+        log_failure("safe_browsing_lookup_failed", exc)
+        return None
 
 
 def predict_with_pipeline(url: str):
@@ -273,6 +321,8 @@ def normalize_db_record(record, raw_url):
     check_url_in_db trả nguyên row DB (field không xác định) nên FE không đọc
     được -> hiển thị sai. Chỉ tin 2 nguồn đã biết; shape lạ thì trả None để
     rơi xuống các tầng sau thay vì trả verdict không rõ ràng."""
+    if not isinstance(record, dict):
+        return None
     source = record.get("source", "")
     if source == "database_blacklist":
         status, prob, risk = "Phishing", 1.0, "High"
@@ -280,7 +330,9 @@ def normalize_db_record(record, raw_url):
         status, prob, risk = "Safe", 0.0, "Low"
     else:
         return None
-    tr = record.get("technical_report") or {}
+    tr = record.get("technical_report")
+    if not isinstance(tr, dict):
+        tr = {}
     return {
         "url": record.get("url", raw_url),
         "status": status, "probability": prob, "risk_level": risk,
@@ -295,14 +347,13 @@ def normalize_db_record(record, raw_url):
 
 
 @app.post("/predict")
-async def predict(request: URLRequest):
-    raw_url = request.url
-    processed_url = raw_url.lower() if raw_url.startswith("http") else "http://" + raw_url.lower()
+def predict(request: URLRequest):
+    with analysis_slot():
+        return _predict_url(request.url)
 
-    # 0. Định dạng URL (lỗi nhập liệu -> 400 với lý do rõ ràng)
-    ok, reason = validate_url_format(processed_url)
-    if not ok:
-        raise HTTPException(status_code=400, detail=f"URL không đúng định dạng: {reason}")
+
+def _predict_url(raw_url):
+    processed_url = _normalize_target(raw_url)
 
     # 1. DB Nội bộ (đã chuẩn hóa về shape chuẩn; shape lạ thì bỏ qua).
     #    Tra DB trước DNS: URL đã biết là phishing thì vẫn báo phishing
@@ -317,6 +368,7 @@ async def predict(request: URLRequest):
     # 2. Tên miền có tồn tại không (DNS NXDOMAIN -> dừng sớm, không chạy model).
     host = urlparse(processed_url).hostname or ""
     dns_status, dns_records = resolve_dns(host)
+    _require_public_target(host, (dns_status, dns_records))
     if dns_status == "nxdomain":
         info = get_domain_info(processed_url, dns_result=(dns_status, dns_records))
         age = info.get("whois", {}).get("age_days")
@@ -335,11 +387,6 @@ async def predict(request: URLRequest):
             "source": "domain_check",
         }
 
-    if not is_safe_url(processed_url):
-        # Lỗi phải trả HTTP status thật, không trả 200 kèm {"status": "Error"}
-        # vì FE đọc response.ok sẽ tưởng là kết quả hợp lệ.
-        raise HTTPException(status_code=400, detail="URL blocked for security reasons")
-
     # 3. Thông tin tên miền chi tiết (DNS/WHOIS/TLS/HTTP, fail-soft) — dùng
     #    chung cho mọi response bên dưới; đồng thời cho biết tên miền có đang
     #    hoạt động không (warning nếu inactive).
@@ -354,11 +401,11 @@ async def predict(request: URLRequest):
     if google_res: return _attach_domain_info(google_res, info)
 
     # 6. AI Analysis (pipeline v8)
-    if (model_nn is None or model_xgb is None or tokenizer_index is None or scaler is None
-            or tfidf_f2 is None or svd_f2 is None):
-        raise HTTPException(status_code=503, detail="Models not loaded")
+    if not _models_loaded():
+        raise ApiError(503, "Models not loaded", "MODEL_NOT_READY")
     try:
-        status, prob, nn_prob, source = predict_with_pipeline(processed_url)
+        with _inference_lock:
+            status, prob, nn_prob, source = predict_with_pipeline(processed_url)
 
         if source == "whitelist":
             return _attach_domain_info({
@@ -372,7 +419,7 @@ async def predict(request: URLRequest):
                 "source": "whitelist"
             }, info)
 
-        adv = get_advanced_insights(processed_url)
+        adv = get_advanced_insights(processed_url, info)
         risk = "High" if prob >= 0.7 else ("Medium" if prob >= 0.4 else "Low")
 
         return _attach_domain_info({
@@ -386,10 +433,9 @@ async def predict(request: URLRequest):
             },
             "source": "ai_analysis"
         }, info)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        log_failure("prediction_failed", exc, level=logging.ERROR)
+        raise ApiError(500, "Internal server error", "INTERNAL_ERROR") from None
 
 if __name__ == "__main__":
     import uvicorn

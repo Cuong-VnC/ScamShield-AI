@@ -5,13 +5,13 @@ Mọi hàm đều fail-soft: timeout ngắn (3-5 giây), tra cứu nào lỗi th
 chạm vào model hay thứ tự đặc trưng — chỉ bổ sung thông tin hiển thị và
 logic "tên miền không tồn tại / không hoạt động" cho /predict.
 """
-import ipaddress
+import http.client
 import re
-import socket
 import ssl
-import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from threading import BoundedSemaphore
+from time import monotonic
 from urllib.parse import urljoin, urlparse
 
 import dns.exception
@@ -21,7 +21,13 @@ import requests
 import tldextract
 import whois
 
-DNS_TIMEOUT = 3.0
+from network_safety import (
+    UnsafeTarget, WEB_PORTS, connect_public, ip_literal, is_public_ip,
+    open_web_response, parse_web_target, public_addresses, remaining, resolve_addresses,
+)
+
+
+DNS_TIMEOUT = 4.0
 WHOIS_TIMEOUT = 4.0
 TLS_TIMEOUT = 4.0
 HTTP_TIMEOUT = 4.0
@@ -30,41 +36,24 @@ IP_API_URL = ("http://ip-api.com/json/{ip}"
               "?fields=status,country,regionName,city,isp,org,as,query")
 MAX_REDIRECTS = 5
 OVERALL_TIMEOUT = 6.0
-
-# IP nội bộ / đặc biệt: chặn SSRF khi theo redirect (chỉ chặn các dải nội bộ
-# thật sự; không chặn 198.18.0.0/15 (benchmark/CGNAT) vì đó không phải mạng nội bộ).
-_BLOCKED_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
-    ipaddress.ip_network("fe80::/10"),
-]
-
 _UA = {"User-Agent": "Mozilla/5.0 (ScamShield-AI domain check)"}
+# Use the bundled PSL for display checks to avoid a network request during cold start.
+extract_domain_parts = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None)
+_PROBE_WORKERS = 8
+_probe_pool = ThreadPoolExecutor(max_workers=_PROBE_WORKERS, thread_name_prefix="domain-probe")
+_probe_slots = BoundedSemaphore(_PROBE_WORKERS)
 
 
-def _is_public_ip(ip_str: str) -> bool:
-    """True nếu IP không nằm trong các dải nội bộ/đặc biệt ở trên."""
+def _submit_probe(fn, *args):
+    if not _probe_slots.acquire(blocking=False):
+        return None
     try:
-        ip = ipaddress.ip_address(ip_str)
-    except ValueError:
-        return False
-    if ip.is_multicast or ip.is_unspecified or ip.is_reserved:
-        return False
-    return not any(ip in net for net in _BLOCKED_NETWORKS)
-
-
-def _is_public_host(host: str) -> bool:
-    """Hostname có phân giải ra IP công khai không (dùng cho redirect)."""
-    try:
-        ip = socket.gethostbyname(host)
-    except Exception:
-        return False
-    return _is_public_ip(ip)
+        future = _probe_pool.submit(fn, *args)
+    except BaseException:
+        _probe_slots.release()
+        raise
+    future.add_done_callback(lambda _: _probe_slots.release())
+    return future
 
 
 def _fmt_date(value):
@@ -104,7 +93,7 @@ def _parse_date(value):
 
 def _registered_domain(host):
     """Tên miền đăng ký (vd www.google.com -> google.com), dùng cho SOA/DMARC/DNSSEC."""
-    ext = tldextract.extract(host or "")
+    ext = extract_domain_parts(host or "")
     return f"{ext.domain}.{ext.suffix}" if ext.domain and ext.suffix else (host or "")
 
 
@@ -206,11 +195,12 @@ def _cert_sig_alg(der):
 def _ip_geo(ip):
     """Geo/ASN/ISP của 1 IP qua ip-api.com (miễn phí, không cần key).
     Trả dict {'country','region','city','isp','org','asn'} hoặc None (fail-soft)."""
-    if not ip:
+    if not is_public_ip(ip):
         return None
     try:
-        r = requests.get(IP_API_URL.format(ip=ip), headers=_UA, timeout=IP_API_TIMEOUT)
-        data = r.json()
+        with requests.get(IP_API_URL.format(ip=ip), headers=_UA, timeout=IP_API_TIMEOUT,
+                          allow_redirects=False) as response:
+            data = response.json()
         if data.get("status") == "success":
             return {"country": data.get("country"), "region": data.get("regionName"),
                     "city": data.get("city"), "isp": data.get("isp"),
@@ -220,98 +210,116 @@ def _ip_geo(ip):
     return None
 
 
-def _query(resolver, host, rtype):
-    """Truy vấn 1 loại bản ghi, trả list chuỗi (rỗng nếu lỗi/không có)."""
+def _query(resolver, host, rtype, deadline):
+    """Tra cứu bổ sung phục vụ hiển thị, trong deadline DNS chung."""
     try:
-        ans = resolver.resolve(host, rtype)
-        out = []
-        for r in ans:
-            txt = r.to_text().strip().strip('"')
-            if txt:
-                out.append(txt)
-        return out
-    except Exception:
+        answers = resolver.resolve(host, rtype, search=False,
+                                   lifetime=min(1.0, remaining(deadline)))
+        return [text for answer in answers if (text := answer.to_text().strip().strip('"'))]
+    except (OSError, dns.exception.DNSException):
         return []
 
 
 def resolve_dns(host, resolver=None):
-    """Phân giải DNS qua dnspython (resolver hệ thống).
-
-    Trả về (status, records):
-      status: resolved | nxdomain | no_answer | timeout | error | skipped_ip
-      records: {"a", "aaaa", "mx", "ns", "txt", "cname", "soa", "ptr", "spf",
-                "dmarc", "dnssec"} — "soa" là dict {primary_ns, serial, raw} hoặc
-      None; "dmarc" là dict {record, policy} hoặc None; "dnssec" là dict
-      {enabled, ds, dnskey}; "spf" là chuỗi bản ghi SPF hoặc None.
-    `resolver` có thể truyền vào (dùng cho unit test); mặc định dùng resolver hệ thống.
-    Các tra cứu mở rộng (CNAME/SOA/PTR/SPF/DMARC/DNSSEC) dùng lifetime 1s vì
-    chỉ phục vụ hiển thị, không chặn kết luận về tên miền.
-    """
+    """Trả trạng thái, bản ghi A/AAAA và các bản ghi hiển thị trong một deadline."""
     records = {"a": [], "aaaa": [], "mx": [], "ns": [], "txt": [], "cname": [],
                "soa": None, "ptr": [], "spf": None, "dmarc": None,
                "dnssec": {"enabled": False, "ds": False, "dnskey": False}}
-    if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", host) or ":" in host:
-        return "skipped_ip", records
-    if resolver is None:
-        resolver = dns.resolver.Resolver()
-        resolver.timeout = DNS_TIMEOUT
-        resolver.lifetime = DNS_TIMEOUT
+    deadline = monotonic() + DNS_TIMEOUT
     try:
-        a = _query(resolver, host, "A")
-        aaaa = _query(resolver, host, "AAAA")
-        if not a and not aaaa:
-            # Phân biệt "domain không tồn tại" với "domain có nhưng không có bản ghi A/AAAA":
-            # truy vấn lại để xem resolver báo NXDOMAIN hay NoAnswer.
-            try:
-                resolver.resolve(host, "A")
-            except dns.resolver.NXDOMAIN:
-                return "nxdomain", records
-            except dns.resolver.NoAnswer:
-                return "no_answer", records
-            except (dns.resolver.Timeout, dns.exception.Timeout):
-                return "timeout", records
-            except Exception:
-                return "no_answer", records
-            return "no_answer", records
-        records["a"] = a
-        records["aaaa"] = aaaa
-        records["mx"] = _query(resolver, host, "MX")[:5]
-        records["ns"] = _query(resolver, host, "NS")[:5]
-        records["txt"] = [t[:200] for t in _query(resolver, host, "TXT")[:3]]
-        # --- Tra cứu mở rộng (chỉ hiển thị; lifetime 1s, lỗi -> giá trị rỗng) ---
-        reg = _registered_domain(host)
-        old_lifetime = getattr(resolver, "lifetime", None)
-        try:
-            resolver.lifetime = 1.0
-            records["cname"] = _query(resolver, host, "CNAME")[:3]
-            soa_raw = _query(resolver, reg, "SOA")
-            records["soa"] = _parse_soa(soa_raw[0]) if soa_raw else None
-            first_ip = a[0] if a else (aaaa[0] if aaaa else None)
-            if first_ip:
-                try:
-                    rev = dns.reversename.from_address(first_ip)
-                    records["ptr"] = [p.rstrip(".") for p in _query(resolver, rev, "PTR")[:2]]
-                except Exception:
-                    records["ptr"] = []
-            txt_full = _query(resolver, host, "TXT")[:5]
-            records["spf"] = next(
-                (t for t in txt_full if t.strip().lower().startswith("v=spf1")), None)
-            dmarc_raw = _query(resolver, "_dmarc." + reg, "TXT")
-            records["dmarc"] = _parse_dmarc(dmarc_raw[0]) if dmarc_raw else None
-            ds = _query(resolver, reg, "DS")
-            dnskey = _query(resolver, reg, "DNSKEY")
-            records["dnssec"] = {"enabled": bool(ds or dnskey),
-                                 "ds": bool(ds), "dnskey": bool(dnskey)}
-        finally:
-            if old_lifetime is not None:
-                resolver.lifetime = old_lifetime
-        return "resolved", records
-    except dns.resolver.NXDOMAIN:
-        return "nxdomain", records
-    except (dns.resolver.Timeout, dns.exception.Timeout):
-        return "timeout", records
-    except Exception:
+        if resolver is None and ip_literal(host) is None:
+            public_addresses(host, records)
+            resolver = dns.resolver.Resolver()
+        status, addresses = resolve_addresses(host, deadline, resolver)
+    except UnsafeTarget:
+        return "blocked", records
+    except (dns.exception.DNSException, OSError):
         return "error", records
+    records.update(addresses)
+    if status != "resolved":
+        return status, records
+    try:
+        public_addresses(host, records)
+    except UnsafeTarget:
+        records["a"] = records["aaaa"] = []
+        return "blocked", records
+    try:
+        records["mx"] = _query(resolver, host, "MX", deadline)[:5]
+        records["ns"] = _query(resolver, host, "NS", deadline)[:5]
+        txt_full = _query(resolver, host, "TXT", deadline)[:5]
+        records["txt"] = [text[:200] for text in txt_full[:3]]
+        records["spf"] = next(
+            (text for text in txt_full if text.lower().startswith("v=spf1")), None)
+        reg = _registered_domain(host)
+        records["cname"] = _query(resolver, host, "CNAME", deadline)[:3]
+        soa_raw = _query(resolver, reg, "SOA", deadline)
+        records["soa"] = _parse_soa(soa_raw[0]) if soa_raw else None
+        first_ip = (records["a"] or records["aaaa"])[0]
+        rev = dns.reversename.from_address(first_ip)
+        records["ptr"] = [text.rstrip(".") for text in _query(resolver, rev, "PTR", deadline)[:2]]
+        dmarc_raw = _query(resolver, "_dmarc." + reg, "TXT", deadline)
+        records["dmarc"] = _parse_dmarc(dmarc_raw[0]) if dmarc_raw else None
+        ds = _query(resolver, reg, "DS", deadline)
+        dnskey = _query(resolver, reg, "DNSKEY", deadline)
+        records["dnssec"] = {"enabled": bool(ds or dnskey), "ds": bool(ds), "dnskey": bool(dnskey)}
+    except (ValueError, OSError, dns.exception.DNSException):
+        pass
+    return status, records
+
+
+def _resolved_public_addresses(host, deadline):
+    status, records = resolve_addresses(host, deadline)
+    if status == "blocked":
+        raise UnsafeTarget("non-public hostname")
+    addresses = public_addresses(host, records)
+    if not addresses:
+        if status == "timeout":
+            raise TimeoutError
+        raise OSError("DNS lookup unavailable")
+    return addresses
+
+
+def _read_whois(host, query, deadline):
+    addresses = _resolved_public_addresses(host, deadline)
+    sock, _ = connect_public(addresses, 43, deadline)
+    with sock:
+        sock.settimeout(remaining(deadline))
+        sock.sendall(query.encode("ascii") + b"\r\n")
+        data = bytearray()
+        limit = 64 * 1024
+        while len(data) < limit:
+            sock.settimeout(remaining(deadline))
+            chunk = sock.recv(min(4096, limit - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+    return data.decode("utf-8", "replace")
+
+
+def _lookup_whois(domain):
+    """Reuse WHOIS registry selection and parsing with bounded public sockets."""
+    query = domain.rstrip(".").encode("idna").decode("ascii")
+    public_addresses(query, {})
+    client = whois.NICClient()
+    host = client.choose_server(query)
+    if not host:
+        return None
+    deadline = monotonic() + WHOIS_TIMEOUT
+    wire_query = query
+    if host == client.DENICHOST:
+        wire_query = "-T dn,ace -C UTF-8 " + query
+    elif host == client.DK_HOST:
+        wire_query = " --show-handles " + query
+    response = _read_whois(host, wire_query, deadline)
+    try:
+        if 'with "=xxx"' in response and host.endswith(client.QNICHOST_TAIL):
+            response = _read_whois(host, "=" + query, deadline)
+        referral = client.findwhois_server(response, host, query)
+        if referral and referral != host:
+            response += _read_whois(referral, query, deadline)
+    except (UnsafeTarget, OSError):
+        pass  # An unavailable referral does not discard the registry response.
+    return whois.WhoisEntry.load(domain, response)
 
 
 def whois_lookup(domain):
@@ -320,10 +328,10 @@ def whois_lookup(domain):
     out = {"status": "unknown", "created": None, "expires": None, "updated": None,
            "registrar": None, "age_days": None, "name_servers": None,
            "domain_status": None}
-    if not domain or "." not in domain:
+    if not domain or "." not in domain or ip_literal(domain) is not None:
         return out
     try:
-        w = whois.whois(domain)
+        w = _lookup_whois(domain)
         created = _parse_date(getattr(w, "creation_date", None))
         expires = _parse_date(getattr(w, "expiration_date", None))
         registrar = getattr(w, "registrar", None)
@@ -358,240 +366,172 @@ def whois_lookup(domain):
     return out
 
 
-def tls_info(host, port=443):
-    """Chứng chỉ TLS: hợp lệ không, issuer, ngày hết hạn, số ngày còn lại,
-    SANs, thuật toán ký, TLS version và cipher đã thỏa thuận."""
-    out = {"checked": False, "valid": None, "issuer": None, "subject": None,
-           "expires": None, "days_left": None, "error": None, "sans": None,
-           "sig_alg": None, "tls_version": None, "cipher": None,
-           "cipher_bits": None}
-    if not host or re.fullmatch(r"\d+\.\d+\.\d+\.\d+", host):
-        out["error"] = "IP host, skip TLS check"
-        return out
+def _tls_defaults(error=None):
+    return {"checked": False, "valid": None, "issuer": None, "subject": None,
+            "expires": None, "days_left": None, "error": error, "sans": None,
+            "sig_alg": None, "tls_version": None, "cipher": None, "cipher_bits": None}
+
+
+def tls_info(host, port=443, addresses=None):
+    """Đọc chứng chỉ qua IP đã kiểm tra, với SNI và xác thực theo hostname."""
+    out = _tls_defaults()
+    if not host or ip_literal(host) is not None:
+        return _tls_defaults("IP host, skip TLS check")
+    if port not in WEB_PORTS:
+        return _tls_defaults("web port blocked")
     try:
-        ctx = ssl.create_default_context()
-        with socket.create_connection((host, port), timeout=TLS_TIMEOUT) as sock:
-            with ctx.wrap_socket(sock, server_hostname=host) as ssock:
-                cert = ssock.getpeercert()
-                der = ssock.getpeercert(binary_form=True)
-                out["tls_version"] = ssock.version()
-                cipher = ssock.cipher()
-                if cipher:
-                    out["cipher"] = cipher[0]
-                    out["cipher_bits"] = cipher[2] if len(cipher) > 2 else None
+        deadline = monotonic() + TLS_TIMEOUT
+        if addresses is None:
+            addresses = _resolved_public_addresses(host, deadline)
+        sock, _ = connect_public(addresses, port, deadline, server_name=host)
+        with sock:
+            cert = sock.getpeercert()
+            der = sock.getpeercert(binary_form=True)
+            out["tls_version"] = sock.version()
+            cipher = sock.cipher()
+            if cipher:
+                out["cipher"], _, out["cipher_bits"] = cipher
         out["checked"] = True
 
         def _name(field):
-            parts = dict((k, v) for item in cert.get(field, []) for k, v in item)
+            parts = {key: value for item in cert.get(field, []) for key, value in item}
             return parts.get("organizationName") or parts.get("commonName")
 
         out["issuer"] = _name("issuer")
         out["subject"] = _name("subject")
-        sans = [v for t, v in cert.get("subjectAltName", []) if t == "DNS"]
-        out["sans"] = sans[:10] if sans else None
+        sans = [value for kind, value in cert.get("subjectAltName", []) if kind == "DNS"]
+        out["sans"] = sans[:10] or None
         out["sig_alg"] = _cert_sig_alg(der)
         exp = cert.get("notAfter")
         if exp:
-            dt = datetime.strptime(exp, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
+            dt = datetime.fromtimestamp(ssl.cert_time_to_seconds(exp), timezone.utc)
             out["expires"] = dt.date().isoformat()
             out["days_left"] = (dt - datetime.now(timezone.utc)).days
-            out["valid"] = out["days_left"] >= 0
-        else:
-            out["valid"] = True
-    except ssl.SSLCertVerificationError as e:
-        out["checked"] = True
-        out["valid"] = False
-        out["error"] = f"certificate verify failed: {e.verify_message or e}"
-    except Exception as e:
-        out["error"] = f"{type(e).__name__}: {e}"[:200]
+        out["valid"] = True  # The TLS context verified the hostname and certificate lifetime.
+    except ssl.SSLCertVerificationError:
+        out.update(checked=True, valid=False, error="certificate verification failed")
+    except UnsafeTarget:
+        out["error"] = "destination blocked"
+    except TimeoutError:
+        out["error"] = "timeout"
+    except (OSError, ValueError):
+        out["error"] = "TLS connection failed"
     return out
 
 
-def http_check(url):
-    """HTTP(S): status, redirect chain (tự theo tối đa 5, chặn redirect về IP nội bộ),
-    server header, thời gian phản hồi. Không đọc body."""
-    out = {"reachable": None, "status_code": None, "final_url": None,
-           "redirects": [], "server": None, "content_type": None,
-           "content_length": None, "redirect_count": 0,
-           "resolved_ip": None, "ip_info": None,
-           "response_time_ms": None, "error": None}
+def _http_defaults(error=None):
+    return {"reachable": None, "status_code": None, "final_url": None, "redirects": [],
+            "server": None, "content_type": None, "content_length": None, "redirect_count": 0,
+            "resolved_ip": None, "ip_info": None, "response_time_ms": None, "error": error}
+
+
+def http_check(url, addresses=None):
+    """Kiểm tra HTTP theo từng hop, giới hạn thời gian và chỉ đọc header."""
+    out = _http_defaults()
+    start = monotonic()
+    deadline = start + HTTP_TIMEOUT
     current = url
-    t0 = time.time()
     try:
-        for _ in range(MAX_REDIRECTS + 1):
-            try:
-                resp = requests.get(current, headers=_UA, timeout=HTTP_TIMEOUT,
-                                    allow_redirects=False, stream=True)
-            except requests.exceptions.Timeout:
-                out["error"] = "timeout"
-                out["reachable"] = False
+        for hop in range(MAX_REDIRECTS + 1):
+            parsed, host, port = parse_web_target(current)
+            if addresses is None:
+                addresses = _resolved_public_addresses(host, deadline)
+            if hop:
+                out["redirects"].append(current)
+            with open_web_response(parsed, host, port, addresses, _UA, deadline) as (response, ip):
+                out["status_code"] = response.status
+                out["final_url"] = current
+                out["resolved_ip"] = ip
+                out["server"] = (response.headers.get("Server") or "")[:120] or None
+                out["content_type"] = (response.headers.get("Content-Type") or "").split(";")[0][:80] or None
+                try:
+                    length = response.headers.get("Content-Length")
+                    out["content_length"] = int(length) if length is not None else None
+                except ValueError:
+                    out["content_length"] = None
+                location = response.headers.get("Location")
+            if response.status not in (301, 302, 303, 307, 308) or not location:
+                out["reachable"] = response.status < 500
                 return out
-            except requests.exceptions.SSLError as e:
-                out["error"] = f"TLS error: {e}"[:200]
-                out["reachable"] = False
-                return out
-            except requests.exceptions.RequestException as e:
-                out["error"] = f"{type(e).__name__}: {e}"[:200]
-                out["reachable"] = False
-                return out
-            try:
-                resp.close()
-            except Exception:
-                pass
-            out["status_code"] = resp.status_code
-            out["final_url"] = resp.url
-            out["server"] = (resp.headers.get("server") or "")[:120] or None
-            out["content_type"] = (resp.headers.get("content-type") or "").split(";")[0][:80] or None
-            _cl = resp.headers.get("content-length")
-            try:
-                out["content_length"] = int(_cl) if _cl is not None else None
-            except (TypeError, ValueError):
-                out["content_length"] = None
-            if resp.is_redirect or resp.status_code in (301, 302, 303, 307, 308):
-                loc = resp.headers.get("location")
-                if not loc:
-                    break
-                nxt = urljoin(current, loc)
-                parsed = urlparse(nxt)
-                if parsed.scheme not in ("http", "https") or not parsed.hostname:
-                    out["error"] = "redirect to non-http URL"
-                    out["reachable"] = False
-                    return out
-                if not _is_public_host(parsed.hostname):
-                    out["error"] = "redirect to private/internal host (blocked)"
-                    out["reachable"] = False
-                    return out
-                out["redirects"].append(nxt)
-                current = nxt
-                continue
-            break
-        else:
-            out["error"] = "too many redirects"
-            out["reachable"] = False
-            return out
-        out["reachable"] = out["status_code"] is not None and out["status_code"] < 500
-        out["response_time_ms"] = int((time.time() - t0) * 1000)
-    except Exception as e:  # fail-soft tuyệt đối
-        out["error"] = f"{type(e).__name__}: {e}"[:200]
-        out["reachable"] = False
+            current = urljoin(current, location)
+            addresses = None  # Resolve and pin the next hop, including same-host redirects.
+        out["error"] = "too many redirects"
+    except UnsafeTarget:
+        out["error"] = "destination blocked"
+    except ssl.SSLError:
+        out["error"] = "TLS connection failed"
+    except TimeoutError:
+        out["error"] = "timeout"
+    except (OSError, ValueError, http.client.HTTPException):
+        out["error"] = "timeout" if monotonic() >= deadline else "HTTP connection failed"
     finally:
-        # Luôn đếm đủ số lần chuyển hướng, kể cả các đường return sớm ở trên.
         out["redirect_count"] = len(out["redirects"])
+        out["response_time_ms"] = int((monotonic() - start) * 1000)
+    out["reachable"] = False
     return out
+
+
+def _probe_result(future, default, deadline):
+    if future is not None:
+        try:
+            return future.result(timeout=remaining(deadline))
+        except Exception:
+            future.cancel()
+    return default
 
 
 def get_domain_info(url, dns_result=None, resolver=None):
-    """Tổng hợp DNS + WHOIS + TLS + HTTP cho 1 URL (chạy song song, deadline chung).
-
-    Trả về dict có các key: domain, host, is_ip_host, dns, whois, tls, http,
-    status ("active" | "inactive" | "nonexistent" | "unknown"), reachable.
-    `dns_result` (tuple từ resolve_dns) có thể truyền vào để khỏi tra lại.
-    """
+    """Tổng hợp thông tin tên miền với số tác vụ và deadline hữu hạn."""
     parsed = urlparse(str(url))
     host = (parsed.hostname or "").lower()
-    ext = tldextract.extract(str(url))
-    domain = f"{ext.domain}.{ext.suffix}" if ext.domain and ext.suffix else host
-    is_ip = bool(re.fullmatch(r"\d+\.\d+\.\d+\.\d+", host)) or ":" in host
-
-    if dns_result is not None:
-        dns_status, dns_records = dns_result
-    else:
-        dns_status, dns_records = resolve_dns(host, resolver=resolver)
-
-    tasks = {}
-    deadline = time.time() + OVERALL_TIMEOUT
-    # Không dùng `with` (shutdown(wait=True) sẽ chờ cả thread WHOIS đang treo
-    # vì python-whois không có timeout socket nội bộ) — shutdown(wait=False)
-    # để request trả về đúng deadline dù thread nền còn treo.
-    pool = ThreadPoolExecutor(max_workers=3)
+    domain = _registered_domain(host)
+    is_ip = ip_literal(host) is not None
+    dns_status, dns_records = dns_result if dns_result is not None else resolve_dns(host, resolver=resolver)
     try:
-        if not is_ip:
-            tasks["whois"] = pool.submit(whois_lookup, domain)
+        addresses = public_addresses(host, dns_records) if dns_status != "blocked" else ()
+    except UnsafeTarget:
+        dns_status = "blocked"
+        dns_records = {**dns_records, "a": [], "aaaa": []}
+        addresses = ()
+
+    deadline = monotonic() + OVERALL_TIMEOUT
+    whois_task = _submit_probe(whois_lookup, domain) if not is_ip and dns_status != "blocked" else None
+    tls_task = None
+    http_task = None
+    if addresses:
         if parsed.scheme == "https" and not is_ip:
-            tasks["tls"] = pool.submit(tls_info, host)
-        tasks["http"] = pool.submit(http_check, str(url))
+            tls_task = _submit_probe(tls_info, host, parsed.port or 443, addresses)
+        http_task = _submit_probe(http_check, str(url), addresses)
 
-        def _collect(name, default):
-            fut = tasks.get(name)
-            if fut is None:
-                return default
-            try:
-                # Deadline CHUNG cho cả 3 tra cứu (không cộng dồn từng cái).
-                return fut.result(timeout=max(0.1, deadline - time.time()))
-            except Exception:
-                return default
+    whois_out = _probe_result(whois_task, {
+        "status": "unknown", "created": None, "expires": None, "updated": None,
+        "registrar": None, "age_days": None, "name_servers": None, "domain_status": None,
+    }, deadline)
+    tls_out = _probe_result(tls_task, _tls_defaults("timeout" if tls_task else None), deadline)
+    http_out = _probe_result(http_task, _http_defaults("timeout" if http_task else None), deadline)
 
-        whois_out = _collect("whois", {"status": "unknown", "created": None,
-                                       "expires": None, "updated": None,
-                                       "registrar": None, "age_days": None,
-                                       "name_servers": None, "domain_status": None})
-        tls_out = _collect("tls", {"checked": False, "valid": None, "issuer": None,
-                                   "subject": None, "expires": None, "days_left": None,
-                                   "error": "timeout", "sans": None, "sig_alg": None,
-                                   "tls_version": None, "cipher": None,
-                                   "cipher_bits": None})
-        http_out = _collect("http", {"reachable": None, "status_code": None, "final_url": None,
-                                     "redirects": [], "server": None, "content_type": None,
-                                     "content_length": None, "redirect_count": 0,
-                                     "resolved_ip": None, "ip_info": None,
-                                     "response_time_ms": None, "error": "timeout"})
-    finally:
-        pool.shutdown(wait=False, cancel_futures=True)
-
-    # IP đã phân giải + geo/ASN/ISP (ip-api.com, fail-soft, timeout 4s).
-    resolved_ip = None
-    if is_ip:
-        resolved_ip = host
-    elif dns_records.get("a"):
-        resolved_ip = dns_records["a"][0]
-    else:
-        final_host = (urlparse(http_out.get("final_url") or str(url)).hostname or "")
-        if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", final_host or ""):
-            resolved_ip = final_host
-        elif final_host and ":" not in final_host:
-            try:
-                rslv = resolver or dns.resolver.Resolver()
-                rslv.timeout = 2.0
-                rslv.lifetime = 2.0
-                _a = _query(rslv, final_host, "A")
-                if _a:
-                    resolved_ip = _a[0]
-            except Exception:
-                pass
+    resolved_ip = http_out["resolved_ip"] or (addresses[0] if addresses else None)
     http_out["resolved_ip"] = resolved_ip
-    http_out["redirect_count"] = len(http_out.get("redirects") or [])
-    http_out["ip_info"] = _ip_geo(resolved_ip) if resolved_ip else None
+    if resolved_ip and monotonic() < deadline:
+        geo_task = _submit_probe(_ip_geo, resolved_ip)
+        http_out["ip_info"] = _probe_result(geo_task, None, deadline)
 
-    # Kết luận tổng hợp về tên miền
     if dns_status == "nxdomain":
         status, reachable = "nonexistent", False
-    elif dns_status == "no_answer":
+    elif dns_status in ("no_answer", "blocked"):
+        status, reachable = ("inactive", False) if dns_status == "no_answer" else ("unknown", None)
+    elif http_out["reachable"] is True:
+        status, reachable = "active", True
+    elif http_out["reachable"] is False and dns_status in ("resolved", "skipped_ip"):
         status, reachable = "inactive", False
-    elif dns_status == "resolved" or dns_status == "skipped_ip":
-        if http_out.get("reachable") is True:
-            status, reachable = "active", True
-        elif http_out.get("reachable") is False:
-            status, reachable = "inactive", False
-        else:
-            status, reachable = "unknown", None
-    else:  # timeout / error: DNS không kết luận được
-        if http_out.get("reachable") is True:
-            status, reachable = "active", True
-        elif http_out.get("reachable") is False:
-            status, reachable = "unknown", None
-        else:
-            status, reachable = "unknown", None
+    else:
+        status, reachable = "unknown", None
 
     return {
-        "domain": domain,
-        "host": host,
-        "is_ip_host": is_ip,
+        "domain": domain, "host": host, "is_ip_host": is_ip,
         "dns": {"status": dns_status, **dns_records},
-        "whois": whois_out,
-        "tls": tls_out,
-        "http": http_out,
-        "status": status,
-        "reachable": reachable,
+        "whois": whois_out, "tls": tls_out, "http": http_out,
+        "status": status, "reachable": reachable,
     }
 
 
