@@ -7,7 +7,7 @@
 //   - ghi đè bằng ?api=https://... trên URL (được nhớ trong localStorage), ?api=reset để xoá.
 
 const AiApi = (() => {
-  const DEFAULT_API = "https://phishing-ai-api.onrender.com";
+  const DEFAULT_API = "https://scamshield-ai-be.onrender.com";
   const LOCAL_API = "http://localhost:8000";
   const API_KEY = "scamshield_api_base";
   // Máy chủ Render miễn phí có thể mất 30–60 giây để khởi động lại.
