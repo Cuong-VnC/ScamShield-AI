@@ -5,6 +5,10 @@ __pycache__/
 
 # File bí mật (QUAN TRỌNG)
 .env
+.env.*
+!.env.example
+*.pem
+*.key
 
 # File tạm của VS Code
 .vscode/
