@@ -192,7 +192,9 @@ r = client.post("/predict", json={"url": "https://www.google.com:81/"})
 show("inactive google:81", r)
 b = r.json() if r.status_code == 200 else {}
 check("inactive: HTTP 200", r.status_code == 200, str(r.status_code))
-check("inactive: domain_status inactive", b.get("domain_status") == "inactive",
+# Cổng bị từ chối ngay -> "inactive"; cổng bị firewall bỏ gói (vd. runner GitHub)
+# -> hết OVERALL_TIMEOUT -> "unknown". Cả hai đều kèm warning.
+check("inactive: domain_status inactive/unknown", b.get("domain_status") in ("inactive", "unknown"),
       str(b.get("domain_status")))
 check("inactive: co warning", bool(b.get("warning")), str(b.get("warning")))
 check("inactive: van co ket qua model (status Safe vi whitelist)",
