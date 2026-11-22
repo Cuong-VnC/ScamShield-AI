@@ -38,11 +38,18 @@ jobs:
 
       - name: Tests (tests/test_*.py)
         # Các file test là script độc lập (tự in PASS/FAIL, sys.exit(1) khi lỗi) – chạy từng file như README.
+        shell: bash
         run: |
+          set -o pipefail
           status=0
           for t in tests/test_*.py; do
             echo "::group::$t"
-            python "$t" || { echo "::error file=$t::$t FAILED"; status=1; }
+            if ! python "$t" 2>&1 | tee test.log; then
+              # Đưa danh sách check lỗi lên annotation để xem ngay trên trang Actions.
+              fails=$(grep "^FAIL " test.log | head -20 | paste -sd ';' - | cut -c1-900)
+              echo "::error file=$t::$t FAILED – $fails"
+              status=1
+            fi
             echo "::endgroup::"
           done
           exit $status
