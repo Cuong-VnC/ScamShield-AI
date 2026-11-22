@@ -1,0 +1,6 @@
+# Chỉ đưa vào image những gì backend cần (allowlist).
+*
+!requirements.txt
+!backend/
+backend/**/__pycache__
+backend/**/*.pyc

@@ -1,0 +1,10 @@
+# Môi trường ảo
+venv/
+.venv/
+__pycache__/
+
+# File bí mật (QUAN TRỌNG)
+.env
+
+# File tạm của VS Code
+.vscode/

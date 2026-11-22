@@ -1,0 +1,29 @@
+# D-06: ping backend Render mỗi 10 phút để server miễn phí không ngủ (ngủ sau ~15 phút không có request).
+# Lưu ý: GitHub chỉ chạy lịch (schedule) trên nhánh mặc định (main) và có thể trễ vài phút.
+name: Keep Render warm
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping /health
+        env:
+          # Ghi đè bằng Settings → Secrets and variables → Actions → Variables → RENDER_HEALTH_URL
+          HEALTH_URL: ${{ vars.RENDER_HEALTH_URL || 'https://scamshield-ai-be.onrender.com/health' }}
+        run: |
+          out=$(curl -sS -o body.json -w "%{http_code} %{time_total}" --retry 3 --retry-delay 10 \
+                --retry-all-errors --max-time 120 "$HEALTH_URL")
+          code=${out% *}; secs=${out#* }
+          echo "HTTP $code trong ${secs}s"; cat body.json; echo
+          echo "| URL | HTTP | Thời gian (s) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| $HEALTH_URL | $code | $secs |" >> "$GITHUB_STEP_SUMMARY"
+          [ "$code" = "200" ]

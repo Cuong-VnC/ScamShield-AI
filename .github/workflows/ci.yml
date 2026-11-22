@@ -1,0 +1,124 @@
+# D-05: chạy kiểm tra cho mỗi PR; PR đỏ nếu một job lỗi.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, fe, "Nhánh-của-đại-ca"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (Python 3.11)
+    # ubuntu-latest (26.04) chưa có bản Python 3.11 dựng sẵn cho setup-python.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Compile check
+        run: python -m compileall -q backend/src
+
+      - name: Tests (tests/test_*.py)
+        # Các file test là script độc lập (tự in PASS/FAIL, sys.exit(1) khi lỗi) – chạy từng file như README.
+        shell: bash
+        run: |
+          set -o pipefail
+          status=0
+          for t in tests/test_*.py; do
+            echo "::group::$t"
+            if ! python "$t" 2>&1 | tee test.log; then
+              # Đưa danh sách check lỗi lên annotation để xem ngay trên trang Actions.
+              fails=$(grep "^FAIL " test.log | head -20 | paste -sd ';' - | cut -c1-900)
+              echo "::error file=$t::$t FAILED – $fails"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $status
+
+      - name: Smoke test API (/health, /predict)
+        run: |
+          python -m uvicorn backend.src.main:app --host 127.0.0.1 --port 8000 > uvicorn.log 2>&1 &
+          for i in $(seq 1 90); do
+            curl -fsS http://127.0.0.1:8000/health > health.json 2>/dev/null && break
+            sleep 2
+          done
+          cat health.json
+          python -c "import json,sys; h=json.load(open('health.json')); sys.exit(0 if h.get('models_loaded') else 'models_loaded=false')"
+          code=$(curl -s -o predict.json -w "%{http_code}" -X POST http://127.0.0.1:8000/predict \
+            -H "Content-Type: application/json" -d '{"url":"https://www.google.com"}')
+          echo "POST /predict -> HTTP $code"; cat predict.json; echo
+          [ "$code" = "200" ]
+
+      - name: Server log
+        if: always()
+        run: cat uvicorn.log || true
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: JS syntax check
+        run: for f in js/*.js; do node --check "$f"; done
+
+      - name: Smoke test static site
+        run: |
+          python3 -m http.server 8080 --bind 127.0.0.1 &
+          for i in $(seq 1 20); do curl -fs http://127.0.0.1:8080/ >/dev/null && break; sleep 1; done
+          curl -fs http://127.0.0.1:8080/index.html | grep -q "ScamShield"
+          curl -fs http://127.0.0.1:8080/bao-cao.html >/dev/null
+          curl -fs http://127.0.0.1:8080/js/api.js | grep -q "const AiApi"
+          # Mọi file js/css được HTML tham chiếu phải tồn tại.
+          for page in *.html; do
+            for ref in $(grep -oE '(src|href)="[^"#?]+\.(js|css)"' "$page" | sed -E 's/.*="([^"]+)"/\1/' | grep -v '^https\?://'); do
+              [ -f "$ref" ] || { echo "$page tham chiếu file không tồn tại: $ref"; exit 1; }
+            done
+          done
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build
+        run: docker build -t scamshield-api:ci .
+
+      - name: Image size
+        run: docker image ls scamshield-api:ci --format '{{.Size}}'
+
+      - name: Run and check /health
+        run: |
+          docker run -d --name api -p 8000:8000 scamshield-api:ci
+          for i in $(seq 1 90); do
+            curl -fsS http://127.0.0.1:8000/health > health.json 2>/dev/null && break
+            sleep 2
+          done
+          cat health.json
+          grep -q '"models_loaded":true' health.json || { docker logs api; exit 1; }
