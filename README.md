@@ -122,7 +122,7 @@ dùng biến `PORT` nên deploy được lên Render dạng Docker. Không đưa
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) chạy cho mỗi PR và khi push lên `main` / `fe`:
 
-- **Backend:** Python 3.11, `compileall`, `pytest tests/`, khởi động uvicorn rồi kiểm tra `/health`
+- **Backend:** Python 3.11, `compileall`, chạy từng script `tests/test_*.py`, khởi động uvicorn rồi kiểm tra `/health`
   (`models_loaded=true`) và `POST /predict` trả 200.
 - **Frontend:** `node --check js/*.js`, phục vụ thư mục gốc, kiểm tra trang chính, `api.js` và mọi file JS/CSS
   mà HTML tham chiếu.
