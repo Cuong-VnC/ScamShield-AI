@@ -12,7 +12,9 @@ small businesses identify potential scams, analyze suspicious content, and impro
 > Dự án học tập (nhóm ICTLab, USTH). Kết quả chỉ mang tính tham khảo — luôn cẩn trọng trước khi nhập mật
 > khẩu, mã OTP hay chuyển tiền trên bất kỳ trang web nào.
 
-**Link web kiểm thử model:** https://kiemtratenmien.vercel.app/
+**Web:** https://gaost25uytingiare.vercel.app/ · **API:** https://scamshield-ai-be.onrender.com/health
+
+`https://kiemtratenmien.vercel.app/` là bản thử nghiệm cũ, không còn dùng.
 
 Lưu ý: server có thể phải khởi động lại sau 5–10 phút không dùng, nên phải chờ server chạy lại mới gửi link được.
 
@@ -76,7 +78,7 @@ python -m http.server 8080
 | Trang mở từ | Backend |
 | --- | --- |
 | `localhost`, `127.0.0.1`, `file://` | `http://localhost:8000` |
-| nơi khác | `https://phishing-ai-api.onrender.com` (sửa `DEFAULT_API` trong [js/api.js](js/api.js)) |
+| nơi khác | `https://scamshield-ai-be.onrender.com` (sửa `DEFAULT_API` trong [js/api.js](js/api.js)) |
 | bất kỳ, thêm `?api=https://...` | địa chỉ đó (được nhớ trong trình duyệt; `?api=reset` để xoá) |
 
 Kiểm tra nhanh backend:
@@ -102,7 +104,49 @@ Chi tiết API (`/predict`, `/domain-info`, các giá trị `status`) xem
 
 - **Backend (Render):** start command `uvicorn backend.src.main:app --host 0.0.0.0 --port $PORT`,
   đặt `PYTHON_VERSION=3.11.9`.
-- **Giao diện:** host tĩnh thư mục gốc (GitHub Pages, Netlify, …). Backend đã bật CORS cho mọi origin.
+- **Giao diện:** host tĩnh thư mục gốc trên Vercel (https://gaost25uytingiare.vercel.app/). Backend đã bật CORS
+  cho mọi origin.
+
+### Docker
+
+```bash
+docker build -t scamshield-api .
+docker run --rm -p 8000:8000 --env-file .env scamshield-api
+curl http://localhost:8000/health        # {"status":"ok","models_loaded":true,...}
+```
+
+Image chỉ chứa `backend/` + `requirements.txt` (`tensorflow-cpu`), chạy bằng user không phải root, có `HEALTHCHECK`,
+dùng biến `PORT` nên deploy được lên Render dạng Docker. Không đưa `.env` vào image.
+
+### CI (GitHub Actions)
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) chạy cho mỗi PR và khi push lên `main` / `fe`:
+
+- **Backend:** Python 3.11, `compileall`, `pytest tests/`, khởi động uvicorn rồi kiểm tra `/health`
+  (`models_loaded=true`) và `POST /predict` trả 200.
+- **Frontend:** `node --check js/*.js`, phục vụ thư mục gốc, kiểm tra trang chính, `api.js` và mọi file JS/CSS
+  mà HTML tham chiếu.
+- **Docker:** build image, chạy container, chờ `/health` báo model đã nạp.
+
+Job nào lỗi thì PR đỏ. Nên bật *Branch protection → Require status checks* cho `main`.
+
+### Giảm cold start của Render
+
+Render miễn phí cho server ngủ sau ~15 phút không có request (lần gọi đầu mất 30–90 giây).
+[`.github/workflows/keep-render-warm.yml`](.github/workflows/keep-render-warm.yml) ping `/health` mỗi 10 phút và
+ghi thời gian phản hồi vào trang tóm tắt của mỗi lần chạy.
+
+- Lịch chạy **chỉ có hiệu lực trên nhánh mặc định (`main`)**.
+- Đổi URL bằng biến repo `RENDER_HEALTH_URL` (Settings → Secrets and variables → Actions → Variables).
+- GitHub có thể trễ lịch; nếu vẫn bị cold start, thêm UptimeRobot / cron-job.org ping `/health` 5 phút/lần hoặc
+  dùng gói Render trả phí.
+
+### Tên miền & HTTPS
+
+- Vercel tự cấp TLS và chuyển `http://` → `https://` (308, có HSTS).
+- Gắn tên miền riêng: Vercel → Project → Settings → Domains; tại DNS tạo `CNAME www → cname.vercel-dns.com`
+  (domain gốc dùng bản ghi `A` theo hướng dẫn Vercel), rồi cập nhật link ở đầu README.
+- Bản cũ `kiemtratenmien.vercel.app`: xoá project đó trên Vercel hoặc thêm redirect sang domain chính.
 
 ## Nguồn dữ liệu
 
