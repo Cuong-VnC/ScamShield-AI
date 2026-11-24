@@ -4,7 +4,7 @@
 - **Phạm vi áp dụng:** trang web https://gaost25uytingiare.vercel.app và API https://scamshield-ai-be.onrender.com
 - **Về dự án:** ScamShield-AI là dự án học tập của nhóm sinh viên: công cụ kiểm tra một URL có phải lừa đảo hay không, gồm trang web quét URL, API FastAPI và mô hình AI v8. Tài liệu này được soạn theo tinh thần Nghị định 13/2023/NĐ-CP về bảo vệ dữ liệu cá nhân. Đây là văn bản của dự án học tập, không phải tư vấn pháp lý.
 
-> **Ghi chú cho nhóm (đọc trước khi công bố):** các mục đánh dấu **[CẦN NHÓM CHỐT]** là quyết định nhóm chưa thống nhất trong code — Thái cần hỏi nhóm chốt trước khi đăng trang này lên web (F-05). Phần còn lại đã khớp với code đang chạy trên nhánh deploy ngày 24/11/2026.
+> **Ghi chú cho nhóm (đọc trước khi công bố):** 3 quyết định về thời gian lưu và kênh liên hệ đã được chốt ngày 25/11/2026 (xem cuối tài liệu). Nội dung đã khớp với code đang chạy trên nhánh deploy ngày 24/11/2026.
 
 ---
 
@@ -16,8 +16,8 @@
 | --- | --- | --- | --- |
 | URL bạn gửi để quét | Kiểm tra URL có lừa đảo không (tra danh sách đen/trắng, URLhaus, Google Safe Browsing, mô hình AI) | Chỉ xử lý trong bộ nhớ khi quét, **không lưu lên máy chủ** | Không lưu |
 | Thông tin công khai của tên miền trong URL đó (DNS, WHOIS, TLS, HTTP) | Hiển thị trong kết quả quét | Chỉ dùng để tạo kết quả trả về, không lưu riêng | Không lưu |
-| Báo cáo lừa đảo bạn gửi *(tính năng sẽ có khi B-06 hoàn thành)* | Kiểm duyệt rồi bổ sung vào danh sách cảnh báo | Cơ sở dữ liệu Supabase, trạng thái "chờ duyệt" | **[CẦN NHÓM CHỐT — đề xuất: 12 tháng kể từ ngày gửi]** |
-| Phản hồi "kết quả này sai" *(tính năng sẽ có khi B-08 hoàn thành)* | Làm dữ liệu huấn luyện lại mô hình | Cơ sở dữ liệu Supabase, lưu **ẩn danh** (chỉ URL và đánh giá đúng/sai) | **[CẦN NHÓM CHỐT — đề xuất: tối đa 24 tháng]** |
+| Báo cáo lừa đảo bạn gửi *(tính năng sẽ có khi B-06 hoàn thành)* | Kiểm duyệt rồi bổ sung vào danh sách cảnh báo | Cơ sở dữ liệu Supabase, trạng thái "chờ duyệt" | Tối đa 12 tháng kể từ ngày gửi (báo cáo bị từ chối: tối đa 3 tháng). Báo cáo được duyệt: URL được giữ lại trong danh sách cảnh báo, bản ghi báo cáo gốc vẫn bị xóa sau tối đa 12 tháng. |
+| Phản hồi "kết quả này sai" *(tính năng sẽ có khi B-08 hoàn thành)* | Làm dữ liệu huấn luyện lại mô hình | Cơ sở dữ liệu Supabase, lưu **ẩn danh** (chỉ URL và đánh giá đúng/sai) | Cho đến khi được dùng để huấn luyện lại mô hình, tối đa 24 tháng |
 | Nhật ký kỹ thuật (mã yêu cầu, đường dẫn API, mã trạng thái, loại lỗi) | Giám sát lỗi và chống lạm dụng | Nhật ký máy chủ (Render) | 30 ngày |
 | Dữ liệu trên trình duyệt của bạn (lịch sử báo cáo, ngôn ngữ giao diện) | Hiển thị lại lịch sử cho bạn | Chỉ lưu trên máy của bạn (localStorage), **không gửi lên máy chủ** | Do bạn tự xóa trong trình duyệt |
 
@@ -42,7 +42,7 @@ Khi bạn bấm liên kết ra ngoài (ví dụ trang báo cáo của Cục An t
 
 ### A.4. Quyền của bạn và cách yêu cầu xóa dữ liệu
 
-- Bạn có quyền yêu cầu xóa báo cáo hoặc phản hồi mình đã gửi. Hãy liên hệ qua mục Issues của repo GitHub https://github.com/Cuong-VnC/ScamShield-AI/issues và cung cấp URL đã gửi cùng thời gian gửi để nhóm đối chiếu. **[CẦN NHÓM CHỐT kênh liên hệ chính thức — hiện tạm dùng GitHub Issues.]**
+- Bạn có quyền yêu cầu xóa báo cáo hoặc phản hồi mình đã gửi. Hãy liên hệ qua mục Issues của repo GitHub https://github.com/Cuong-VnC/ScamShield-AI/issues, dùng mẫu "Yêu cầu xóa dữ liệu" và chỉ cung cấp URL đã gửi cùng thời gian gửi để nhóm đối chiếu — không ghi thêm thông tin cá nhân. Nhóm sẽ xử lý trong vòng 7 ngày.
 - Lịch sử báo cáo trên trình duyệt của bạn: xóa trong phần cài đặt/lịch sử của trình duyệt, nhóm không thể xóa thay bạn vì dữ liệu đó không nằm trên máy chủ.
 - Bạn có thể ngừng dùng dịch vụ bất cứ lúc nào; việc quét URL không cần tài khoản nên không có dữ liệu tài khoản nào cần xóa.
 
@@ -80,7 +80,7 @@ Khi chính sách thay đổi, ngày cập nhật ở đầu trang sẽ được 
 
 ### B.5. Liên hệ
 
-- Mọi thắc mắc hoặc yêu cầu liên quan đến chính sách này, gửi qua mục Issues của repo GitHub: https://github.com/Cuong-VnC/ScamShield-AI/issues
+- Mọi thắc mắc hoặc yêu cầu liên quan đến chính sách này, gửi qua mục Issues của repo GitHub: https://github.com/Cuong-VnC/ScamShield-AI/issues (nhóm phản hồi trong vòng 7 ngày).
 
 ---
 
@@ -98,8 +98,8 @@ Khi chính sách thay đổi, ngày cập nhật ở đầu trang sẽ được 
 | --- | --- | --- | --- |
 | URL you submit for scanning | Checking whether the URL is a scam (blocklist/allowlist lookup, URLhaus, Google Safe Browsing, AI model) | Processed in memory only, **not stored on our servers** | Not stored |
 | Public information about the domain in that URL (DNS, WHOIS, TLS, HTTP) | Shown in the scan result | Used only to build the result, not stored separately | Not stored |
-| Scam reports you submit *(available once B-06 is complete)* | Reviewed and added to the warning list | Supabase database, status "pending review" | **[TEAM TO DECIDE — proposed: 12 months from submission]** |
-| "This result is wrong" feedback *(available once B-08 is complete)* | Used as training data to retrain the model | Supabase database, stored **anonymously** (URL and correct/wrong verdict only) | **[TEAM TO DECIDE — proposed: up to 24 months]** |
+| Scam reports you submit *(available once B-06 is complete)* | Reviewed and added to the warning list | Supabase database, status "pending review" | Up to 12 months from submission (rejected reports: up to 3 months). For approved reports, the URL stays in the warning list while the original report record is still deleted after up to 12 months. |
+| "This result is wrong" feedback *(available once B-08 is complete)* | Used as training data to retrain the model | Supabase database, stored **anonymously** (URL and correct/wrong verdict only) | Until used to retrain the model, up to 24 months |
 | Technical logs (request ID, API route, status code, error type) | Error monitoring and abuse prevention | Server logs (Render) | 30 days |
 | Browser data (report history, interface language) | Showing your history back to you | Stored only on your device (localStorage), **never sent to our servers** | You delete it in your browser settings |
 
@@ -124,7 +124,7 @@ When you follow an external link (for example the report page of the Authority o
 
 #### A.4. Your rights and how to request deletion
 
-- You can request deletion of a report or feedback you submitted. Contact us via the Issues section of the GitHub repo at https://github.com/Cuong-VnC/ScamShield-AI/issues and provide the submitted URL and the time of submission so we can match it. **[TEAM TO DECIDE the official contact channel — GitHub Issues is used for now.]**
+- You can request deletion of a report or feedback you submitted. Contact us via the Issues section of the GitHub repo at https://github.com/Cuong-VnC/ScamShield-AI/issues, using the "Data deletion request" template and providing only the submitted URL and the time of submission so we can match it — no additional personal information. We will handle your request within 7 days.
 - Report history in your browser: delete it in your browser settings; we cannot delete it for you because it is not on our servers.
 - You can stop using the service at any time; scanning requires no account, so there is no account data to delete.
 
@@ -160,13 +160,13 @@ When this policy changes, the date at the top will be updated. Major changes wil
 
 #### B.5. Contact
 
-- Questions or requests about this policy: open an issue at https://github.com/Cuong-VnC/ScamShield-AI/issues
+- Questions or requests about this policy: open an issue at https://github.com/Cuong-VnC/ScamShield-AI/issues (we reply within 7 days).
 
 ---
 
 ## Ghi chú cho nhóm review (xóa trước khi đăng lên web ở F-05)
 
-- Các mục **[CẦN NHÓM CHỐT]** cần nhóm thống nhất: (1) thời gian lưu báo cáo (đề xuất 12 tháng), (2) thời gian lưu phản hồi (đề xuất tối đa 24 tháng), (3) kênh liên hệ chính thức (tạm dùng GitHub Issues).
+- 3 quyết định đã chốt ngày 25/11/2026: (1) báo cáo lưu tối đa 12 tháng (bị từ chối: tối đa 3 tháng), (2) phản hồi lưu cho đến khi dùng để huấn luyện lại mô hình, tối đa 24 tháng, (3) kênh liên hệ chính thức là GitHub Issues, có mẫu "Yêu cầu xóa dữ liệu" và thời gian xử lý trong vòng 7 ngày.
 - Mốc "tính năng sẽ có khi B-06/B-08 hoàn thành" phải được cập nhật khi Tùng (B-06) và Quân (B-08) làm xong: khi đó báo cáo và phản hồi mới thực sự được lưu lên server; hiện tại trang báo cáo chỉ lưu trên trình duyệt.
 - Câu về "5 trường hợp báo nhầm trên 50 URL" lấy từ kết quả hồi quy Q-01 ngày 25/11/2026 (ket-qua-q01.json); cập nhật lại nếu model được train lại (M-06) hoặc ngưỡng thay đổi (M-03).
 - Tài liệu này đã đối chiếu với code thật trên nhánh deploy (24/11/2026): `/predict` không lưu URL đã quét lên server, log chỉ ghi mã yêu cầu/đường dẫn/mã trạng thái (không ghi URL), không có tài khoản người dùng, báo cáo hiện chỉ lưu localStorage.
